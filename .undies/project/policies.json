@@ -1,0 +1,6 @@
+﻿{
+    "reverse_synchronization":  "DISABLED",
+    "git_tracking":  "manual",
+    "external_connections":  "deny-by-default",
+    "extensions_enabled":  false
+}
