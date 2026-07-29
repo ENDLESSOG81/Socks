@@ -357,8 +357,16 @@ function Invoke-SOCKSGit {
         [Parameter(Mandatory=$true)][string[]]$Arguments
     )
 
-    $Output = & git -C $WorkspaceRoot @Arguments 2>&1
-    return [ordered]@{ exit_code = $LASTEXITCODE; output = @($Output | ForEach-Object { "$_" }) }
+    try {
+        $PreviousPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $Output = & git -C $WorkspaceRoot @Arguments 2>&1
+        return [ordered]@{ exit_code = $LASTEXITCODE; output = @($Output | ForEach-Object { "$_" }) }
+    } catch {
+        return [ordered]@{ exit_code = 1; output = @($_.Exception.Message) }
+    } finally {
+        $ErrorActionPreference = $PreviousPreference
+    }
 }
 
 function Get-SOCKSGitEvidence {
@@ -427,6 +435,7 @@ function Get-SOCKSRuntimeEvidence {
         $Command = Get-SOCKSValue -Source $_ -Name 'command'
         $VersionArgs = @(Get-SOCKSValue -Source $_ -Name 'version_args' -Default @('--version'))
         $Requirement = "$(Get-SOCKSValue -Source $_ -Name 'requirement' -Default 'ADVISORY')".ToUpperInvariant()
+        $MinVersion = Get-SOCKSValue -Source $_ -Name 'min_version'
         if($Requirement -notin @('REQUIRED','OPTIONAL','ADVISORY')){ $Requirement = 'ADVISORY' }
         $Resolved = Get-Command $Command -ErrorAction SilentlyContinue
         $Version = $null
@@ -443,6 +452,11 @@ function Get-SOCKSRuntimeEvidence {
             }
         }
         $Usable = ($null -ne $Resolved -and ($null -eq $ExitCode -or $ExitCode -eq 0))
+        $DetectedVersion = Get-SOCKSVersionNumber -Text $Version
+        $VersionMeetsMinimum = $true
+        if($Usable -and -not [string]::IsNullOrWhiteSpace("$MinVersion") -and -not [string]::IsNullOrWhiteSpace("$DetectedVersion")){
+            $VersionMeetsMinimum = ((Compare-SOCKSSemVer -Left $DetectedVersion -Right $MinVersion) -ge 0)
+        }
         [ordered]@{
             id = $Id
             command = $Command
@@ -450,6 +464,9 @@ function Get-SOCKSRuntimeEvidence {
             found = $Usable
             source = if($Resolved){ $Resolved.Source } else { $null }
             version = $Version
+            detected_version = $DetectedVersion
+            min_version = $MinVersion
+            version_meets_minimum = $VersionMeetsMinimum
             version_exit_code = $ExitCode
             error = Protect-SOCKSSecret $ErrorText
         }
@@ -526,6 +543,7 @@ function Get-SOCKSConnectivityEvidence {
         $Id = Get-SOCKSValue -Source $_ -Name 'id' -Default 'unnamed-connector'
         $Type = "$(Get-SOCKSValue -Source $_ -Name 'type' -Default 'custom')".ToLowerInvariant()
         $Enabled = [bool](Get-SOCKSValue -Source $_ -Name 'enabled' -Default $false)
+        $SyntheticFailure = "$(Get-SOCKSValue -Source $_ -Name 'synthetic_failure' -Default '')".ToLowerInvariant()
         $Requirement = "$(Get-SOCKSValue -Source $_ -Name 'requirement' -Default 'OPTIONAL')".ToUpperInvariant()
         if($Requirement -notin @('REQUIRED','OPTIONAL','ADVISORY')){ $Requirement = 'OPTIONAL' }
         [ordered]@{
@@ -534,7 +552,8 @@ function Get-SOCKSConnectivityEvidence {
             supported_type = ($SupportedTypes -contains $Type)
             enabled = $Enabled
             requirement = $Requirement
-            status = if(-not $Enabled){ 'SKIPPED' } elseif($SupportedTypes -contains $Type){ 'REGISTERED' } else { 'ERROR' }
+            status = if(-not $Enabled){ 'SKIPPED' } elseif($SupportedTypes -notcontains $Type){ 'ERROR' } elseif($SyntheticFailure -in @('timeout','dns','authentication')){ 'FAIL' } else { 'REGISTERED' }
+            failure_mode = if($SyntheticFailure){ $SyntheticFailure } else { $null }
             credentials_present = 'NOT_INSPECTED'
         }
     })
@@ -564,6 +583,15 @@ function Compare-SOCKSSemVer {
         if($Av -lt $Bv){ return -1 }
     }
     return 0
+}
+
+function Get-SOCKSVersionNumber {
+    param([AllowNull()][string]$Text)
+
+    if([string]::IsNullOrWhiteSpace($Text)){ return $null }
+    $Match = [regex]::Match($Text, '\d+(\.\d+){0,3}')
+    if(-not $Match.Success){ return $null }
+    return $Match.Value
 }
 
 function Get-SOCKSPluginEvidence {
@@ -816,9 +844,10 @@ function Get-SOCKSChecks {
         }.GetNewClosure()},
         @{ id='runtime.dependencies'; name='Configured runtimes and dependencies can be validated'; category='runtime'; requirement='REQUIRED'; body={
             $MissingRequired = @($RuntimeEvidence | Where-Object { $_.requirement -eq 'REQUIRED' -and -not $_.found })
+            $BelowMinimumRequired = @($RuntimeEvidence | Where-Object { $_.requirement -eq 'REQUIRED' -and $_.found -and -not $_.version_meets_minimum })
             $MissingNonRequired = @($RuntimeEvidence | Where-Object { $_.requirement -ne 'REQUIRED' -and -not $_.found })
-            if($MissingRequired.Count -gt 0){
-                return @{status='FAIL';summary='One or more required runtimes are missing.';evidence=$RuntimeEvidence;failure_reason='Required runtime command was not found.';remediation='Install the missing required runtime or adjust SOCKS dependency configuration.'}
+            if($MissingRequired.Count -gt 0 -or $BelowMinimumRequired.Count -gt 0){
+                return @{status='FAIL';summary='One or more required runtimes are missing or below minimum version.';evidence=$RuntimeEvidence;failure_reason='Required runtime command was not found or version is below policy minimum.';remediation='Install or upgrade the missing required runtime, or adjust SOCKS dependency configuration.'}
             }
             if($MissingNonRequired.Count -gt 0){
                 return @{status='PASS';summary='Required runtimes were validated; non-required runtimes may be unavailable.';evidence=$RuntimeEvidence;remediation='Install optional or advisory runtimes if project policy needs them.'}
@@ -836,8 +865,12 @@ function Get-SOCKSChecks {
         }.GetNewClosure()},
         @{ id='connectivity.framework'; name='External connectivity framework can register configured connectors'; category='connectivity'; requirement='REQUIRED'; body={
             $Unsupported = @($ConnectivityEvidence.connectors | Where-Object { -not $_.supported_type })
+            $SyntheticFailures = @($ConnectivityEvidence.connectors | Where-Object { $_.status -eq 'FAIL' })
             if($Unsupported.Count -gt 0){
                 return @{status='FAIL';summary='Unsupported connector types were configured.';evidence=$ConnectivityEvidence;failure_reason='Connector type is not supported by SOCKS connectivity framework.';remediation='Use a supported connector type or implement a plugin connector.'}
+            }
+            if($SyntheticFailures.Count -gt 0){
+                return @{status='FAIL';summary='Configured connector failure mode was detected.';evidence=$ConnectivityEvidence;failure_reason='Synthetic connector failure injection requested.';remediation='Resolve connector timeout, DNS, or authentication condition before promoting the connector to required.'}
             }
             return @{status='PASS';summary='Connectivity framework is available and connector configuration is valid.';evidence=$ConnectivityEvidence}
         }.GetNewClosure()},

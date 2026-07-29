@@ -9,7 +9,9 @@
     "promoted_optional_checks": [],
     "disabled_checks": [],
     "check_levels": {
-      "git.working_tree_clean": "ADVISORY"
+      "git.working_tree_clean": "ADVISORY",
+      "git.remote_status": "ADVISORY",
+      "git.ignore_validation": "ADVISORY"
     },
     "conditional_checks": {},
     "check_dependencies": {},
@@ -27,8 +29,8 @@
   },
   "dependencies": {
     "runtimes": [
-      { "id": "powershell", "command": "powershell", "version_args": ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], "requirement": "REQUIRED" },
-      { "id": "git", "command": "git", "version_args": ["--version"], "requirement": "REQUIRED" },
+      { "id": "powershell", "command": "powershell", "version_args": ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], "requirement": "REQUIRED", "min_version": "5.1.0" },
+      { "id": "git", "command": "git", "version_args": ["--version"], "requirement": "REQUIRED", "min_version": "2.0.0" },
       { "id": "node", "command": "node", "version_args": ["--version"], "requirement": "ADVISORY" },
       { "id": "npm", "command": "npm", "version_args": ["--version"], "requirement": "ADVISORY" },
       { "id": "python", "command": "python", "version_args": ["--version"], "requirement": "ADVISORY" }
@@ -46,7 +48,8 @@
   },
   "external_connectivity": {
     "default_timeout_ms": 5000,
-    "connectors": []
+    "connectors": [],
+    "allow_network": false
   },
   "plugins": {
     "root": "socks/plugins",

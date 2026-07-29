@@ -229,6 +229,13 @@ try {
         Assert-True (-not $RuntimeEvidence[0].found) 'Missing runtime should not be found.'
     }
 
+    Invoke-Test 'SOCKS-005 runtime below minimum version fails evidence' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.dependencies = @{ runtimes = @(@{ id='powershell-too-new'; command='powershell'; version_args=@('-NoProfile','-Command','$PSVersionTable.PSVersion.ToString()'); requirement='REQUIRED'; min_version='99.0.0' }) }
+        $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
+        Assert-True (-not $RuntimeEvidence[0].version_meets_minimum) 'Runtime below minimum should be detected.'
+    }
+
     Invoke-Test 'SOCKS-006 missing environment variable detected without value' {
         $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
         $Config.configuration.required_environment = @('SOCKS_TEST_SECRET_TOKEN_SHOULD_NOT_EXIST')
@@ -261,6 +268,13 @@ try {
         $Config.external_connectivity.connectors = @(@{ id='unknown'; type='not-a-real-type'; enabled=$true; requirement='OPTIONAL' })
         $Evidence = Get-SOCKSConnectivityEvidence -Config $Config
         Assert-True (-not $Evidence.connectors[0].supported_type) 'Unsupported connector should be identified.'
+    }
+
+    Invoke-Test 'SOCKS-007 synthetic connector timeout fails closed' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.external_connectivity.connectors = @(@{ id='timeout'; type='rest'; enabled=$true; requirement='REQUIRED'; synthetic_failure='timeout' })
+        $Evidence = Get-SOCKSConnectivityEvidence -Config $Config
+        Assert-Equal 'FAIL' $Evidence.connectors[0].status 'Synthetic timeout should be represented as connector failure.'
     }
 
     Invoke-Test 'SOCKS-008 plugin manifest validation and ordering' {
@@ -332,6 +346,14 @@ try {
         Assert-Equal 0 $Evidence.documentation.missing.Count 'Certification docs should be present.'
         Assert-True $Evidence.regression.test_file_present 'Regression test file should be present.'
         Assert-True $Evidence.packaging.package_script_present 'Package script should be present.'
+    }
+
+    Invoke-Test 'production hardening deterministic check ordering' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Env = Get-SOCKSEnvironment -Config $Config
+        $First = @(Get-SOCKSChecks -Config $Config -Environment $Env | ForEach-Object id)
+        $Second = @(Get-SOCKSChecks -Config $Config -Environment $Env | ForEach-Object id)
+        Assert-Equal ($First -join '|') ($Second -join '|') 'Check ordering should be deterministic.'
     }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
