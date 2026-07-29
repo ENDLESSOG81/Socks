@@ -433,6 +433,60 @@ function Get-SOCKSRuntimeEvidence {
     })
 }
 
+function Test-SOCKSPlaceholderValue {
+    param(
+        [AllowNull()]$Value,
+        [Parameter(Mandatory=$true)]$Patterns
+    )
+
+    if($null -eq $Value){ return $false }
+    $Text = "$Value"
+    foreach($Pattern in @($Patterns)){
+        if(-not [string]::IsNullOrWhiteSpace("$Pattern") -and $Text -match [regex]::Escape("$Pattern")){ return $true }
+    }
+    return $false
+}
+
+function Get-SOCKSConfigurationSecretEvidence {
+    param([Parameter(Mandatory=$true)]$Config)
+
+    $Configuration = if($Config.Contains('configuration') -and $Config.configuration -is [System.Collections.IDictionary]){ $Config.configuration } else { [ordered]@{} }
+    $RequiredEnv = @(Get-SOCKSValue -Source $Configuration -Name 'required_environment' -Default @())
+    $RequiredSettings = @(Get-SOCKSValue -Source $Configuration -Name 'required_settings' -Default @())
+    $PlaceholderPatterns = @(Get-SOCKSValue -Source $Configuration -Name 'placeholder_patterns' -Default @('TODO','CHANGEME','REPLACE_ME','YOUR_'))
+
+    $EnvEvidence = @($RequiredEnv | ForEach-Object {
+        $Name = "$_"
+        [ordered]@{
+            name = Protect-SOCKSSecret $Name
+            present = ($null -ne [Environment]::GetEnvironmentVariable($Name))
+        }
+    })
+
+    $SettingEvidence = @($RequiredSettings | ForEach-Object {
+        $Key = "$_"
+        $Value = Get-SOCKSValue -Source $Config -Name $Key
+        [ordered]@{
+            key = Protect-SOCKSSecret $Key
+            present = ($null -ne $Value -and -not [string]::IsNullOrWhiteSpace("$Value"))
+            placeholder_detected = Test-SOCKSPlaceholderValue -Value $Value -Patterns $PlaceholderPatterns
+            value = if("$Key" -match '(?i)(secret|token|password|credential|api[_-]?key|private[_-]?key)'){ '[REDACTED]' } else { Protect-SOCKSSecret $Value }
+        }
+    })
+
+    $MissingEnv = @($EnvEvidence | Where-Object { -not $_.present })
+    $MissingSettings = @($SettingEvidence | Where-Object { -not $_.present })
+    $Placeholders = @($SettingEvidence | Where-Object { $_.placeholder_detected })
+
+    return [ordered]@{
+        required_environment = $EnvEvidence
+        required_settings = $SettingEvidence
+        missing_environment_count = $MissingEnv.Count
+        missing_settings_count = $MissingSettings.Count
+        placeholder_count = $Placeholders.Count
+    }
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -495,6 +549,7 @@ function Get-SOCKSChecks {
     $EvidenceRoot = $Environment.evidence_root
     $GitEvidence = Get-SOCKSGitEvidence -WorkspaceRoot $Workspace
     $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
+    $SecretEvidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -570,6 +625,15 @@ function Get-SOCKSChecks {
                 return @{status='WARN';summary='One or more non-required runtimes are missing.';evidence=$RuntimeEvidence;remediation='Install optional runtimes if project policy needs them.'}
             }
             return @{status='PASS';summary='Configured runtimes and dependencies were validated.';evidence=$RuntimeEvidence}
+        }.GetNewClosure()},
+        @{ id='configuration.secrets'; name='Secrets and required configuration can be validated safely'; category='configuration'; requirement='REQUIRED'; body={
+            if($SecretEvidence.missing_environment_count -gt 0 -or $SecretEvidence.missing_settings_count -gt 0){
+                return @{status='FAIL';summary='Required environment variables or configuration settings are missing.';evidence=$SecretEvidence;failure_reason='Required configuration presence check failed.';remediation='Provide required variables/settings without committing secret values.'}
+            }
+            if($SecretEvidence.placeholder_count -gt 0){
+                return @{status='FAIL';summary='Configuration placeholder values were detected.';evidence=$SecretEvidence;failure_reason='Placeholder configuration values are not ready for progression.';remediation='Replace placeholder configuration values with environment-specific values outside source control.'}
+            }
+            return @{status='PASS';summary='Required secret/configuration presence was validated without exposing values.';evidence=$SecretEvidence}
         }.GetNewClosure()},
         @{ id='evidence.directory'; name='Evidence output directory can be created or accessed'; category='evidence'; requirement='REQUIRED'; body={
             if(-not (Test-Path -LiteralPath $EvidenceRoot)){
@@ -677,6 +741,7 @@ function New-SOCKSReport {
         discovery = $Environment.discovery
         git = Get-SOCKSGitEvidence -WorkspaceRoot $Environment.workspace_root
         runtimes = Get-SOCKSRuntimeEvidence -Config $Config
+        configuration_security = Get-SOCKSConfigurationSecretEvidence -Config $Config
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -777,4 +842,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

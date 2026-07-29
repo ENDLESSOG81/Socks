@@ -30,5 +30,15 @@
       { "id": "npm", "command": "npm", "version_args": ["--version"], "requirement": "ADVISORY" },
       { "id": "python", "command": "python", "version_args": ["--version"], "requirement": "ADVISORY" }
     ]
+  },
+  "configuration": {
+    "required_environment": [],
+    "required_settings": [],
+    "placeholder_patterns": [
+      "TODO",
+      "CHANGEME",
+      "REPLACE_ME",
+      "YOUR_"
+    ]
   }
 }

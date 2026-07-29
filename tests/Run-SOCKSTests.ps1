@@ -226,6 +226,24 @@ try {
         $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
         Assert-True (-not $RuntimeEvidence[0].found) 'Missing runtime should not be found.'
     }
+
+    Invoke-Test 'SOCKS-006 missing environment variable detected without value' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.configuration.required_environment = @('SOCKS_TEST_SECRET_TOKEN_SHOULD_NOT_EXIST')
+        $Evidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
+        Assert-Equal 1 $Evidence.missing_environment_count 'Missing env var should be counted.'
+        $Json = $Evidence | ConvertTo-Json -Depth 8
+        Assert-True ($Json -notmatch 'SHOULD_NOT_EXIST=.*') 'Env values should not be included.'
+    }
+
+    Invoke-Test 'SOCKS-006 placeholder setting detected and secret redacted' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.configuration.required_settings = @('api_key')
+        $Config.api_key = 'YOUR_SECRET_VALUE'
+        $Evidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
+        Assert-Equal 1 $Evidence.placeholder_count 'Placeholder should be detected.'
+        Assert-Equal '[REDACTED]' $Evidence.required_settings[0].value 'Secret value should redact.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
