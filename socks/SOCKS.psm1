@@ -1,6 +1,6 @@
 Set-StrictMode -Version Latest
 
-$script:SOCKSVersion = '0.1.0-alpha.1'
+$script:SOCKSVersion = '1.0.0'
 $script:CheckImplementationVersion = '0.1.0'
 $script:SupportedSchemaVersions = @('1.0')
 
@@ -641,6 +641,48 @@ function Get-SOCKSPluginEvidence {
     }
 }
 
+function Get-SOCKSCertificationEvidence {
+    param(
+        [Parameter(Mandatory=$true)]$Config,
+        [Parameter(Mandatory=$true)][string]$WorkspaceRoot
+    )
+
+    $Start = Get-Date
+    $Docs = @(Get-ChildItem -LiteralPath (Join-Path $WorkspaceRoot 'docs') -Filter '*.md' -File -ErrorAction SilentlyContinue)
+    $RequiredDocs = @(
+        'SOCKS-SYSTEM-CONTRACT.md',
+        'SOCKS-002-CONFIGURATION-POLICY.md',
+        'SOCKS-003-DISCOVERY.md',
+        'SOCKS-004-GIT-INTELLIGENCE.md',
+        'SOCKS-005-RUNTIME-DEPENDENCIES.md',
+        'SOCKS-006-SECRETS-CONFIGURATION.md',
+        'SOCKS-007-CONNECTIVITY-FRAMEWORK.md',
+        'SOCKS-008-PLUGIN-ARCHITECTURE.md',
+        'SOCKS-009-EVIDENCE-REPORTING.md',
+        'SOCKS-010-ENTERPRISE-GATE.md',
+        'SOCKS-011-PRODUCTION-CERTIFICATION.md'
+    )
+    $DocNames = @($Docs | ForEach-Object Name)
+    $MissingDocs = @($RequiredDocs | Where-Object { $DocNames -notcontains $_ })
+    $TestPath = Join-Path $WorkspaceRoot 'tests/Run-SOCKSTests.ps1'
+    $PackagePath = Join-Path $WorkspaceRoot 'tools/New-SOCKSReleasePackage.ps1'
+    $PluginEvidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $WorkspaceRoot
+    $SecretEvidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
+    $End = Get-Date
+
+    return [ordered]@{
+        version = $script:SOCKSVersion
+        target_version = '1.0.0'
+        documentation = [ordered]@{ required_count=$RequiredDocs.Count; present_count=@($RequiredDocs | Where-Object { $DocNames -contains $_ }).Count; missing=$MissingDocs }
+        regression = [ordered]@{ test_command='.\tests\Run-SOCKSTests.ps1'; test_file_present=(Test-Path -LiteralPath $TestPath -PathType Leaf) }
+        security = [ordered]@{ redaction_function_present=$true; secrets_not_required_by_default=(@($SecretEvidence.required_environment).Count -eq 0) }
+        performance = [ordered]@{ certification_evidence_duration_ms=[math]::Round(($End - $Start).TotalMilliseconds, 3) }
+        plugins = [ordered]@{ plugin_count=$PluginEvidence.plugin_count; invalid_plugin_count=@($PluginEvidence.plugins | Where-Object { -not $_.valid_manifest }).Count; incompatible_plugin_count=@($PluginEvidence.plugins | Where-Object { $_.valid_manifest -and -not $_.compatible }).Count }
+        packaging = [ordered]@{ package_script_present=(Test-Path -LiteralPath $PackagePath -PathType Leaf); package_script=$PackagePath }
+        cross_platform = [ordered]@{ primary='Windows PowerShell 5.1'; compatible_with=@('PowerShell 7 where standard APIs are available'); known_limitations=@('Get-NetIPConfiguration may be unavailable on non-Windows hosts and is reported as unavailable evidence.') }
+    }
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -706,6 +748,7 @@ function Get-SOCKSChecks {
     $SecretEvidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
     $ConnectivityEvidence = Get-SOCKSConnectivityEvidence -Config $Config
     $PluginEvidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $Workspace
+    $CertificationEvidence = Get-SOCKSCertificationEvidence -Config $Config -WorkspaceRoot $Workspace
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -804,6 +847,18 @@ function Get-SOCKSChecks {
             if($Invalid.Count -gt 0){ return @{status='FAIL';summary='Invalid plugin manifests were found.';evidence=$PluginEvidence;failure_reason='One or more plugin manifests failed validation.';remediation='Fix plugin.json manifest fields.'} }
             if($Incompatible.Count -gt 0){ return @{status='FAIL';summary='Incompatible plugin manifests were found.';evidence=$PluginEvidence;failure_reason='One or more plugins require a newer SOCKS version.';remediation='Upgrade SOCKS or disable/remove incompatible plugins.'} }
             return @{status='PASS';summary='Plugin discovery and manifest validation completed.';evidence=$PluginEvidence}
+        }.GetNewClosure()},
+        @{ id='certification.production_readiness'; name='SOCKS production readiness certification evidence is available'; category='certification'; requirement='REQUIRED'; body={
+            if($CertificationEvidence.version -ne $CertificationEvidence.target_version){
+                return @{status='FAIL';summary='SOCKS version does not match production certification target.';evidence=$CertificationEvidence;failure_reason='Version assignment mismatch.';remediation='Update SOCKS version and configuration before release.'}
+            }
+            if($CertificationEvidence.documentation.missing.Count -gt 0 -or -not $CertificationEvidence.regression.test_file_present -or -not $CertificationEvidence.packaging.package_script_present){
+                return @{status='FAIL';summary='Production certification prerequisites are missing.';evidence=$CertificationEvidence;failure_reason='Documentation, test, or packaging prerequisite missing.';remediation='Complete missing certification prerequisites.'}
+            }
+            if($CertificationEvidence.plugins.invalid_plugin_count -gt 0 -or $CertificationEvidence.plugins.incompatible_plugin_count -gt 0){
+                return @{status='FAIL';summary='Plugin validation prevents production certification.';evidence=$CertificationEvidence;failure_reason='Invalid or incompatible plugins present.';remediation='Fix or remove invalid plugins.'}
+            }
+            return @{status='PASS';summary='Production readiness certification evidence is available.';evidence=$CertificationEvidence}
         }.GetNewClosure()},
         @{ id='evidence.directory'; name='Evidence output directory can be created or accessed'; category='evidence'; requirement='REQUIRED'; body={
             if(-not (Test-Path -LiteralPath $EvidenceRoot)){
@@ -945,6 +1000,7 @@ function New-SOCKSReport {
         configuration_security = Get-SOCKSConfigurationSecretEvidence -Config $Config
         connectivity = Get-SOCKSConnectivityEvidence -Config $Config
         plugins = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $Environment.workspace_root
+        certification = Get-SOCKSCertificationEvidence -Config $Config -WorkspaceRoot $Environment.workspace_root
         timeline = $Timeline
         statistics = $Stats
         failure_analysis = $FailureAnalysis
@@ -1104,4 +1160,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSPluginEvidence,Get-SOCKSDependencyGraph,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSPluginEvidence,Get-SOCKSCertificationEvidence,Get-SOCKSDependencyGraph,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

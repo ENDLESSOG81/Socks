@@ -144,3 +144,4 @@ vite.config.ts.timestamp-*
 
 # SOCKS runtime evidence
 .socks/evidence/
+.socks/release/

@@ -18,6 +18,8 @@ try {
         Write-Host "SOCKS gate result: $($Result.gate.status)"
         Write-Host "JSON report: $($Result.reports.json)"
         Write-Host "Markdown report: $($Result.reports.markdown)"
+        if($Result.reports.html){ Write-Host "HTML report: $($Result.reports.html)" }
+        if($Result.reports.summary){ Write-Host "Summary report: $($Result.reports.summary)" }
     }
 
     exit (Get-SOCKSExitCode -GateStatus $Result.gate.status)

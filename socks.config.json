@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "socks_version": "0.1.0-alpha.1",
+  "socks_version": "1.0.0",
   "workspace_root": ".",
   "evidence_root": ".socks/evidence",
   "required_runtime": "PowerShell",

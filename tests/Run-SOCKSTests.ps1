@@ -35,7 +35,7 @@ function New-TestConfig {
     $ConfigPath = Join-Path $Root 'socks.config.json'
     $Config = [ordered]@{
         schema_version = '1.0'
-        socks_version = '0.1.0-alpha.1'
+        socks_version = '1.0.0'
         workspace_root = $WorkspaceRoot
         evidence_root = $EvidenceRoot
         required_runtime = 'PowerShell'
@@ -52,7 +52,7 @@ try {
     Invoke-Test 'successful configuration loading' {
         $ConfigPath = New-TestConfig -Root $TempRoot -WorkspaceRoot $RepoRoot -EvidenceRoot (Join-Path $TempRoot 'evidence')
         $Config = Import-SOCKSConfiguration -ConfigPath $ConfigPath
-        Assert-Equal '0.1.0-alpha.1' $Config.socks_version 'SOCKS version should load.'
+        Assert-Equal '1.0.0' $Config.socks_version 'SOCKS version should load.'
     }
 
     Invoke-Test 'missing configuration' {
@@ -156,7 +156,7 @@ try {
         $ParentPath = Join-Path $TempRoot 'parent.config.json'
         $ChildPath = Join-Path $TempRoot 'child.config.json'
         Set-Content -LiteralPath $ParentPath -Value (@{
-            schema_version='1.0'; socks_version='0.1.0-alpha.1'; workspace_root=$RepoRoot; evidence_root=(Join-Path $TempRoot 'inherit-evidence'); required_runtime='PowerShell';
+            schema_version='1.0'; socks_version='1.0.0'; workspace_root=$RepoRoot; evidence_root=(Join-Path $TempRoot 'inherit-evidence'); required_runtime='PowerShell';
             policy=@{ promote_optional_failures=$false; disabled_checks=@('git.branch'); check_levels=@{} }
         } | ConvertTo-Json -Depth 8) -Encoding UTF8
         Set-Content -LiteralPath $ChildPath -Value (@{
@@ -323,6 +323,15 @@ try {
         )
         $Graph = Get-SOCKSDependencyGraph -Results $Results -Policy @{ check_dependencies=@{ b=@('a') } }
         Assert-Equal 'a' $Graph[1].dependencies[0] 'Dependency graph should record dependency.'
+    }
+
+    Invoke-Test 'SOCKS-011 production certification evidence generated' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Evidence = Get-SOCKSCertificationEvidence -Config $Config -WorkspaceRoot $RepoRoot
+        Assert-Equal '1.0.0' $Evidence.version 'Certification version should be 1.0.0.'
+        Assert-Equal 0 $Evidence.documentation.missing.Count 'Certification docs should be present.'
+        Assert-True $Evidence.regression.test_file_present 'Regression test file should be present.'
+        Assert-True $Evidence.packaging.package_script_present 'Package script should be present.'
     }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
