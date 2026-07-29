@@ -524,6 +524,100 @@ function Get-SOCKSConnectivityEvidence {
     }
 }
 
+function Compare-SOCKSSemVer {
+    param([string]$Left, [string]$Right)
+
+    $Normalize = {
+        param($Version)
+        $Core = ("$Version" -split '-')[0]
+        return @($Core -split '\.' | ForEach-Object { [int]$_ })
+    }
+    $A = & $Normalize $Left
+    $B = & $Normalize $Right
+    for($Index = 0; $Index -lt 3; $Index++){
+        $Av = if($Index -lt $A.Count){ $A[$Index] } else { 0 }
+        $Bv = if($Index -lt $B.Count){ $B[$Index] } else { 0 }
+        if($Av -gt $Bv){ return 1 }
+        if($Av -lt $Bv){ return -1 }
+    }
+    return 0
+}
+
+function Get-SOCKSPluginEvidence {
+    param(
+        [Parameter(Mandatory=$true)]$Config,
+        [Parameter(Mandatory=$true)][string]$WorkspaceRoot
+    )
+
+    $PluginConfig = if($Config.Contains('plugins') -and $Config.plugins -is [System.Collections.IDictionary]){ $Config.plugins } else { [ordered]@{} }
+    $PluginRoot = Get-SOCKSFullPath -Path (Get-SOCKSValue -Source $PluginConfig -Name 'root' -Default 'socks/plugins') -BasePath $WorkspaceRoot
+    $Enabled = @(Get-SOCKSValue -Source $PluginConfig -Name 'enabled' -Default @())
+    $Manifests = @()
+    if(Test-Path -LiteralPath $PluginRoot -PathType Container){
+        $Manifests = @(Get-ChildItem -LiteralPath $PluginRoot -Filter 'plugin.json' -Recurse -File -ErrorAction SilentlyContinue)
+    }
+
+    $Plugins = @($Manifests | ForEach-Object {
+        $ManifestPath = $_.FullName
+        try {
+            $Manifest = ConvertTo-SOCKSHashtable (Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json)
+            $Errors = @()
+            foreach($Key in @('id','name','version','socks_min_version','entry')){
+                if(-not $Manifest.Contains($Key) -or [string]::IsNullOrWhiteSpace("$($Manifest[$Key])")){ $Errors += "Missing $Key" }
+            }
+            $Compatible = $false
+            if($Errors.Count -eq 0){ $Compatible = (Compare-SOCKSSemVer -Left $script:SOCKSVersion -Right $Manifest.socks_min_version) -ge 0 }
+            [ordered]@{
+                id = Protect-SOCKSSecret (Get-SOCKSValue -Source $Manifest -Name 'id' -Default $_.Directory.Name)
+                name = Protect-SOCKSSecret (Get-SOCKSValue -Source $Manifest -Name 'name' -Default $_.Directory.Name)
+                version = Get-SOCKSValue -Source $Manifest -Name 'version'
+                manifest_path = $ManifestPath
+                enabled = ($Enabled -contains (Get-SOCKSValue -Source $Manifest -Name 'id'))
+                dependencies = @(Get-SOCKSValue -Source $Manifest -Name 'dependencies' -Default @())
+                valid_manifest = ($Errors.Count -eq 0)
+                manifest_errors = $Errors
+                compatible = $Compatible
+                lifecycle = 'discovered'
+                isolation = 'manifest-only'
+            }
+        } catch {
+            [ordered]@{
+                id = $_.Directory.Name
+                manifest_path = $ManifestPath
+                valid_manifest = $false
+                manifest_errors = @($_.Exception.Message)
+                compatible = $false
+                lifecycle = 'manifest-error'
+                isolation = 'manifest-only'
+            }
+        }
+    })
+
+    $Order = @()
+    $Remaining = @($Plugins | Where-Object valid_manifest)
+    while($Remaining.Count -gt 0){
+        $Progress = $false
+        foreach($Plugin in @($Remaining)){
+            $Deps = @($Plugin.dependencies)
+            if(@($Deps | Where-Object { $Order -notcontains $_ }).Count -eq 0){
+                $Order += $Plugin.id
+                $Remaining = @($Remaining | Where-Object { $_.id -ne $Plugin.id })
+                $Progress = $true
+            }
+        }
+        if(-not $Progress){ break }
+    }
+
+    return [ordered]@{
+        plugin_root = $PluginRoot
+        plugin_count = $Plugins.Count
+        valid_count = @($Plugins | Where-Object valid_manifest).Count
+        compatible_count = @($Plugins | Where-Object compatible).Count
+        dependency_order = $Order
+        plugins = $Plugins
+    }
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -588,6 +682,7 @@ function Get-SOCKSChecks {
     $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
     $SecretEvidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
     $ConnectivityEvidence = Get-SOCKSConnectivityEvidence -Config $Config
+    $PluginEvidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $Workspace
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -679,6 +774,13 @@ function Get-SOCKSChecks {
                 return @{status='FAIL';summary='Unsupported connector types were configured.';evidence=$ConnectivityEvidence;failure_reason='Connector type is not supported by SOCKS connectivity framework.';remediation='Use a supported connector type or implement a plugin connector.'}
             }
             return @{status='PASS';summary='Connectivity framework is available and connector configuration is valid.';evidence=$ConnectivityEvidence}
+        }.GetNewClosure()},
+        @{ id='plugins.manifest_validation'; name='Plugin manifests can be discovered and validated'; category='plugins'; requirement='REQUIRED'; body={
+            $Invalid = @($PluginEvidence.plugins | Where-Object { -not $_.valid_manifest })
+            $Incompatible = @($PluginEvidence.plugins | Where-Object { $_.valid_manifest -and -not $_.compatible })
+            if($Invalid.Count -gt 0){ return @{status='FAIL';summary='Invalid plugin manifests were found.';evidence=$PluginEvidence;failure_reason='One or more plugin manifests failed validation.';remediation='Fix plugin.json manifest fields.'} }
+            if($Incompatible.Count -gt 0){ return @{status='FAIL';summary='Incompatible plugin manifests were found.';evidence=$PluginEvidence;failure_reason='One or more plugins require a newer SOCKS version.';remediation='Upgrade SOCKS or disable/remove incompatible plugins.'} }
+            return @{status='PASS';summary='Plugin discovery and manifest validation completed.';evidence=$PluginEvidence}
         }.GetNewClosure()},
         @{ id='evidence.directory'; name='Evidence output directory can be created or accessed'; category='evidence'; requirement='REQUIRED'; body={
             if(-not (Test-Path -LiteralPath $EvidenceRoot)){
@@ -788,6 +890,7 @@ function New-SOCKSReport {
         runtimes = Get-SOCKSRuntimeEvidence -Config $Config
         configuration_security = Get-SOCKSConfigurationSecretEvidence -Config $Config
         connectivity = Get-SOCKSConnectivityEvidence -Config $Config
+        plugins = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $Environment.workspace_root
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -888,4 +991,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSPluginEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

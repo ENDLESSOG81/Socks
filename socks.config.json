@@ -44,5 +44,9 @@
   "external_connectivity": {
     "default_timeout_ms": 5000,
     "connectors": []
+  },
+  "plugins": {
+    "root": "socks/plugins",
+    "enabled": []
   }
 }

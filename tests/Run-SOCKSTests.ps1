@@ -260,6 +260,31 @@ try {
         $Evidence = Get-SOCKSConnectivityEvidence -Config $Config
         Assert-True (-not $Evidence.connectors[0].supported_type) 'Unsupported connector should be identified.'
     }
+
+    Invoke-Test 'SOCKS-008 plugin manifest validation and ordering' {
+        $PluginRoot = Join-Path $TempRoot 'plugins'
+        $PluginA = Join-Path $PluginRoot 'a'
+        $PluginB = Join-Path $PluginRoot 'b'
+        New-Item -ItemType Directory -Path $PluginA,$PluginB -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $PluginA 'plugin.json') -Value (@{ id='plugin-a'; name='Plugin A'; version='1.0.0'; socks_min_version='0.1.0'; entry='plugin.ps1'; dependencies=@() } | ConvertTo-Json -Depth 8) -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $PluginB 'plugin.json') -Value (@{ id='plugin-b'; name='Plugin B'; version='1.0.0'; socks_min_version='0.1.0'; entry='plugin.ps1'; dependencies=@('plugin-a') } | ConvertTo-Json -Depth 8) -Encoding UTF8
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.plugins.root = $PluginRoot
+        $Evidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $RepoRoot
+        Assert-Equal 2 $Evidence.valid_count 'Two plugin manifests should be valid.'
+        Assert-Equal 'plugin-a' $Evidence.dependency_order[0] 'Dependency should come first.'
+    }
+
+    Invoke-Test 'SOCKS-008 invalid plugin manifest detected' {
+        $PluginRoot = Join-Path $TempRoot 'bad-plugins'
+        $BadPlugin = Join-Path $PluginRoot 'bad'
+        New-Item -ItemType Directory -Path $BadPlugin -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $BadPlugin 'plugin.json') -Value (@{ id='bad' } | ConvertTo-Json -Depth 8) -Encoding UTF8
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.plugins.root = $PluginRoot
+        $Evidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $RepoRoot
+        Assert-Equal 0 $Evidence.valid_count 'Invalid plugin should not validate.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
