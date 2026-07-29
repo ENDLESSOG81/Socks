@@ -149,6 +149,37 @@ try {
         Assert-Equal '[REDACTED]' $Protected.nested.password 'Password should redact.'
         Assert-Equal 'visible' $Protected.safe 'Safe value should remain.'
     }
+
+    Invoke-Test 'SOCKS-002 policy inheritance' {
+        $ParentPath = Join-Path $TempRoot 'parent.config.json'
+        $ChildPath = Join-Path $TempRoot 'child.config.json'
+        Set-Content -LiteralPath $ParentPath -Value (@{
+            schema_version='1.0'; socks_version='0.1.0-alpha.1'; workspace_root=$RepoRoot; evidence_root=(Join-Path $TempRoot 'inherit-evidence'); required_runtime='PowerShell';
+            policy=@{ promote_optional_failures=$false; disabled_checks=@('git.branch'); check_levels=@{} }
+        } | ConvertTo-Json -Depth 8) -Encoding UTF8
+        Set-Content -LiteralPath $ChildPath -Value (@{
+            extends='parent.config.json'; policy=@{ disabled_checks=@('git.commit'); check_levels=@{ 'workspace.writable'='OPTIONAL' } }
+        } | ConvertTo-Json -Depth 8) -Encoding UTF8
+        $Config = Import-SOCKSConfiguration -ConfigPath $ChildPath
+        Assert-True $Config.config_integrity.inherited 'Inherited config should be recorded.'
+        Assert-Equal 'git.commit' $Config.policy.disabled_checks[0] 'Child policy should override arrays.'
+        Assert-Equal 'OPTIONAL' $Config.policy.check_levels['workspace.writable'] 'Child policy should merge nested objects.'
+    }
+
+    Invoke-Test 'SOCKS-002 schema validation rejects unsupported schema' {
+        $Schema = Test-SOCKSConfigurationSchema -Config @{ schema_version='9.9'; socks_version='x'; workspace_root='.'; evidence_root='e'; required_runtime='PowerShell'; policy=@{} }
+        Assert-True (-not $Schema.valid) 'Unsupported schema should be invalid.'
+    }
+
+    Invoke-Test 'SOCKS-002 promoted optional check blocks gate' {
+        $Results = @(
+            Invoke-SOCKSCheck -Id 'optional.promoted' -Name 'Promoted optional' -Category 'test' -RequirementLevel 'OPTIONAL' -Body {
+                @{ status='FAIL'; summary='promoted bad'; evidence=@{}; remediation='fix promoted' }
+            }
+        )
+        $Gate = Get-SOCKSGateEvaluation -Results $Results -Policy @{ promote_optional_failures=$false; promoted_optional_checks=@('optional.promoted') }
+        Assert-Equal 'FAIL' $Gate.status 'Promoted optional failure should fail gate.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

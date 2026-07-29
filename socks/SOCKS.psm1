@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 
 $script:SOCKSVersion = '0.1.0-alpha.1'
 $script:CheckImplementationVersion = '0.1.0'
+$script:SupportedSchemaVersions = @('1.0')
 
 function Protect-SOCKSSecret {
     param([AllowNull()]$Value)
@@ -83,6 +84,96 @@ function Get-SOCKSValue {
     return $Default
 }
 
+function Get-SOCKSSha256Text {
+    param([Parameter(Mandatory=$true)][string]$Text)
+
+    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+    $Sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $HashBytes = $Sha.ComputeHash($Bytes)
+        return ([System.BitConverter]::ToString($HashBytes) -replace '-', '').ToUpperInvariant()
+    } finally {
+        $Sha.Dispose()
+    }
+}
+
+function Merge-SOCKSHashtable {
+    param(
+        [Parameter(Mandatory=$true)]$Base,
+        [Parameter(Mandatory=$true)]$Override
+    )
+
+    $Merged = [ordered]@{}
+    foreach($Key in $Base.Keys){ $Merged[$Key] = $Base[$Key] }
+    foreach($Key in $Override.Keys){
+        if($Merged.Contains($Key) -and $Merged[$Key] -is [System.Collections.IDictionary] -and $Override[$Key] -is [System.Collections.IDictionary]){
+            $Merged[$Key] = Merge-SOCKSHashtable -Base $Merged[$Key] -Override $Override[$Key]
+        } else {
+            $Merged[$Key] = $Override[$Key]
+        }
+    }
+    return $Merged
+}
+
+function Normalize-SOCKSPolicy {
+    param([AllowNull()]$Policy)
+
+    if($null -eq $Policy -or $Policy -isnot [System.Collections.IDictionary]){
+        $Policy = [ordered]@{}
+    }
+    if(-not $Policy.Contains('promote_optional_failures')){ $Policy.promote_optional_failures = $false }
+    if(-not $Policy.Contains('promoted_optional_checks') -or $null -eq $Policy.promoted_optional_checks){ $Policy.promoted_optional_checks = @() } else { $Policy.promoted_optional_checks = @($Policy.promoted_optional_checks) }
+    if(-not $Policy.Contains('disabled_checks') -or $null -eq $Policy.disabled_checks){ $Policy.disabled_checks = @() } else { $Policy.disabled_checks = @($Policy.disabled_checks) }
+    if(-not $Policy.Contains('check_levels') -or $null -eq $Policy.check_levels){ $Policy.check_levels = [ordered]@{} }
+    if(-not $Policy.Contains('conditional_checks') -or $null -eq $Policy.conditional_checks){ $Policy.conditional_checks = [ordered]@{} }
+    return $Policy
+}
+
+function Test-SOCKSConfigurationSchema {
+    param([Parameter(Mandatory=$true)]$Config)
+
+    $Errors = @()
+    foreach($RequiredKey in @('schema_version','socks_version','workspace_root','evidence_root','required_runtime','policy')){
+        if(-not $Config.Contains($RequiredKey) -or [string]::IsNullOrWhiteSpace("$($Config[$RequiredKey])")){
+            $Errors += "Required SOCKS configuration key is missing: $RequiredKey"
+        }
+    }
+    if($Config.Contains('schema_version') -and $script:SupportedSchemaVersions -notcontains "$($Config.schema_version)"){
+        $Errors += "Unsupported SOCKS configuration schema_version: $($Config.schema_version)"
+    }
+    if($Config.Contains('policy') -and $Config.policy -isnot [System.Collections.IDictionary]){
+        $Errors += 'SOCKS policy must be an object.'
+    }
+    return [ordered]@{ valid = ($Errors.Count -eq 0); errors = $Errors }
+}
+
+function Import-SOCKSConfigurationFile {
+    param(
+        [Parameter(Mandatory=$true)][string]$ConfigPath,
+        [string[]]$Visited = @()
+    )
+
+    $FullPath = [System.IO.Path]::GetFullPath($ConfigPath)
+    if($Visited -contains $FullPath){ throw "SOCKS configuration inheritance cycle detected at $FullPath" }
+    if(-not (Test-Path -LiteralPath $FullPath -PathType Leaf)){ throw "Required SOCKS configuration was not found at $ConfigPath" }
+
+    $Raw = Get-Content -LiteralPath $FullPath -Raw
+    if([string]::IsNullOrWhiteSpace($Raw)){ throw "Required SOCKS configuration is empty at $FullPath" }
+
+    $Parsed = ConvertTo-SOCKSHashtable ($Raw | ConvertFrom-Json)
+    $Inherited = $false
+    if($Parsed.Contains('extends') -and -not [string]::IsNullOrWhiteSpace("$($Parsed.extends)")){
+        $ParentPath = Get-SOCKSFullPath -Path $Parsed.extends -BasePath (Split-Path -Parent $FullPath)
+        $Parent = Import-SOCKSConfigurationFile -ConfigPath $ParentPath -Visited ($Visited + $FullPath)
+        $Parsed.Remove('extends')
+        $Parsed = Merge-SOCKSHashtable -Base $Parent.config -Override $Parsed
+        $Raw = $Parent.raw + [Environment]::NewLine + $Raw
+        $Inherited = $true
+    }
+
+    return [ordered]@{ config = $Parsed; raw = $Raw; path = $FullPath; inherited = $Inherited }
+}
+
 function Get-SOCKSUndiesSession {
     param([Parameter(Mandatory=$true)][string]$WorkspaceRoot)
 
@@ -105,31 +196,43 @@ function Get-SOCKSUndiesSession {
 function Import-SOCKSConfiguration {
     param([Parameter(Mandatory=$true)][string]$ConfigPath)
 
-    if(-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)){
-        throw "Required SOCKS configuration was not found at $ConfigPath"
-    }
-
-    $Raw = Get-Content -LiteralPath $ConfigPath -Raw
-    if([string]::IsNullOrWhiteSpace($Raw)){
-        throw "Required SOCKS configuration is empty at $ConfigPath"
-    }
-
-    $Config = ConvertTo-SOCKSHashtable ($Raw | ConvertFrom-Json)
-    foreach($RequiredKey in @('schema_version','socks_version','workspace_root','evidence_root','required_runtime')){
-        if(-not $Config.Contains($RequiredKey) -or [string]::IsNullOrWhiteSpace("$($Config[$RequiredKey])")){
-            throw "Required SOCKS configuration key is missing: $RequiredKey"
-        }
-    }
-    if(-not $Config.Contains('policy') -or $null -eq $Config.policy){
-        $Config.policy = [ordered]@{ promote_optional_failures = $false }
-    }
-    if(-not $Config.policy.Contains('promote_optional_failures')){
-        $Config.policy.promote_optional_failures = $false
-    }
-
-    $Config.config_path = [System.IO.Path]::GetFullPath($ConfigPath)
+    $Loaded = Import-SOCKSConfigurationFile -ConfigPath $ConfigPath
+    $Config = $Loaded.config
+    $Schema = Test-SOCKSConfigurationSchema -Config $Config
+    if(-not $Schema.valid){ throw ($Schema.errors -join '; ') }
+    $Config.policy = Normalize-SOCKSPolicy -Policy $Config.policy
+    $Config.config_path = $Loaded.path
     $Config.config_directory = Split-Path -Parent $Config.config_path
+    $Config.config_integrity = [ordered]@{
+        algorithm = 'SHA256'
+        raw_sha256 = Get-SOCKSSha256Text -Text $Loaded.raw
+        inherited = $Loaded.inherited
+        schema_valid = $Schema.valid
+    }
     return $Config
+}
+
+function Resolve-SOCKSCheckRequirement {
+    param(
+        [Parameter(Mandatory=$true)][string]$CheckId,
+        [Parameter(Mandatory=$true)][ValidateSet('REQUIRED','OPTIONAL','ADVISORY')][string]$DefaultRequirement,
+        [Parameter(Mandatory=$true)]$Policy
+    )
+
+    if($Policy.check_levels -is [System.Collections.IDictionary] -and $Policy.check_levels.Contains($CheckId)){
+        $Level = "$($Policy.check_levels[$CheckId])".ToUpperInvariant()
+        if($Level -in @('REQUIRED','OPTIONAL','ADVISORY')){ return $Level }
+    }
+    return $DefaultRequirement
+}
+
+function Test-SOCKSCheckEnabled {
+    param(
+        [Parameter(Mandatory=$true)][string]$CheckId,
+        [Parameter(Mandatory=$true)]$Policy
+    )
+
+    return (@($Policy.disabled_checks) -notcontains $CheckId)
 }
 
 function Get-SOCKSEnvironment {
@@ -264,7 +367,7 @@ function Get-SOCKSChecks {
             return @{status='FAIL';summary='Git commit could not be identified.';evidence=@{commit=$Commit};failure_reason='HEAD could not be resolved to a commit.';remediation='Create an initial commit or repair Git metadata.'}
         }.GetNewClosure()},
         @{ id='config.loaded'; name='Required SOCKS configuration can be loaded'; category='configuration'; requirement='REQUIRED'; body={
-            return @{status='PASS';summary='Required SOCKS configuration was loaded.';evidence=@{config_path=$Config.config_path;schema_version=$Config.schema_version;socks_version=$Config.socks_version}}
+            return @{status='PASS';summary='Required SOCKS configuration was loaded and validated.';evidence=@{config_path=$Config.config_path;schema_version=$Config.schema_version;socks_version=$Config.socks_version;integrity=$Config.config_integrity;policy=$Config.policy}}
         }.GetNewClosure()},
         @{ id='runtime.identified'; name='Required runtime can be identified'; category='runtime'; requirement='REQUIRED'; body={
             if($Environment.runtime -eq $Config.required_runtime){ return @{status='PASS';summary='Required runtime identified.';evidence=@{required_runtime=$Config.required_runtime;powershell_version=$Environment.powershell_version;platform=$Environment.platform}} }
@@ -279,7 +382,10 @@ function Get-SOCKSChecks {
             Remove-Item -LiteralPath $Probe -Force -ErrorAction SilentlyContinue
             return @{status='PASS';summary='Evidence output directory is available.';evidence=@{path=$EvidenceRoot;available=$true}}
         }.GetNewClosure()}
-    )
+    ) | Where-Object { Test-SOCKSCheckEnabled -CheckId $_.id -Policy $Config.policy } | ForEach-Object {
+        $_.requirement = Resolve-SOCKSCheckRequirement -CheckId $_.id -DefaultRequirement $_.requirement -Policy $Config.policy
+        $_
+    }
 }
 
 function Invoke-SOCKSChecks {
@@ -298,18 +404,21 @@ function Get-SOCKSGateEvaluation {
         [Parameter(Mandatory=$true)]$Policy
     )
 
+    $Policy = Normalize-SOCKSPolicy -Policy $Policy
     $Blocking = @($Results | Where-Object { $_.requirement_level -eq 'REQUIRED' -and $_.status -in @('FAIL','ERROR') })
     $OptionalFailures = @($Results | Where-Object { $_.requirement_level -eq 'OPTIONAL' -and $_.status -in @('FAIL','ERROR','WARN') })
     $AdvisoryFailures = @($Results | Where-Object { $_.requirement_level -eq 'ADVISORY' -and $_.status -in @('FAIL','ERROR','WARN') })
     $PromoteOptional = [bool]$Policy.promote_optional_failures
+    $PromotedIds = @($Policy.promoted_optional_checks)
+    $PromotedOptionalFailures = @($OptionalFailures | Where-Object { $PromotedIds -contains $_.id })
 
     if($Blocking.Count -gt 0){
         $Status = 'FAIL'
         $Reason = 'One or more required checks failed or errored.'
-    } elseif($PromoteOptional -and $OptionalFailures.Count -gt 0){
+    } elseif(($PromoteOptional -or $PromotedOptionalFailures.Count -gt 0) -and $OptionalFailures.Count -gt 0){
         $Status = 'FAIL'
         $Reason = 'Policy promoted optional check failures to blocking failures.'
-        $Blocking = $OptionalFailures
+        if($PromoteOptional){ $Blocking = $OptionalFailures } else { $Blocking = $PromotedOptionalFailures }
     } elseif($OptionalFailures.Count -gt 0){
         $Status = 'WARN'
         $Reason = 'Required checks passed, but optional checks produced warnings or failures.'
@@ -329,6 +438,7 @@ function Get-SOCKSGateEvaluation {
             optional_warning_or_failure_count = $OptionalFailures.Count
             advisory_warning_or_failure_count = $AdvisoryFailures.Count
             promote_optional_failures = $PromoteOptional
+            promoted_optional_checks = $PromotedIds
             calculation = $Reason
         }
     }
@@ -368,19 +478,6 @@ function New-SOCKSReport {
             algorithm = 'SHA256'
             payload_sha256_excluding_integrity = $null
         }
-    }
-}
-
-function Get-SOCKSSha256Text {
-    param([Parameter(Mandatory=$true)][string]$Text)
-
-    $Bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-    $Sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $HashBytes = $Sha.ComputeHash($Bytes)
-        return ([System.BitConverter]::ToString($HashBytes) -replace '-', '').ToUpperInvariant()
-    } finally {
-        $Sha.Dispose()
     }
 }
 
@@ -472,4 +569,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

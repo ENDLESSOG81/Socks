@@ -5,6 +5,19 @@
   "evidence_root": ".socks/evidence",
   "required_runtime": "PowerShell",
   "policy": {
-    "promote_optional_failures": false
+    "promote_optional_failures": false,
+    "promoted_optional_checks": [],
+    "disabled_checks": [],
+    "check_levels": {},
+    "conditional_checks": {}
+  },
+  "validation": {
+    "required_keys": [
+      "schema_version",
+      "socks_version",
+      "workspace_root",
+      "evidence_root",
+      "required_runtime"
+    ]
   }
 }
