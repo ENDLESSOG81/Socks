@@ -1,0 +1,121 @@
+﻿{
+    "installation_id":  "UNDIES-038922ea2efc4222b83cb361da40374b",
+    "project_root":  "D:\\GITHUB\\SOCKS",
+    "undies_version":  "0.3.0-alpha.2",
+    "installation_timestamp_utc":  "2026-07-29T10:25:13.2295721Z",
+    "active_core_version":  "0.3.0-alpha.2",
+    "managed_files":  [
+                          {
+                              "path":  "UNDIES.ps1",
+                              "ownership_class":  "CORE_LAUNCHER",
+                              "sha256":  "C1F5634B8F22AEA105D2BE938680A47F7E8077CD92857B8B315795AA9852D926",
+                              "size":  3423,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "release artifact"
+                          },
+                          {
+                              "path":  "UNDIES.ps1.sha256",
+                              "ownership_class":  "CORE_LAUNCHER",
+                              "sha256":  "974BD0D56BD05EE5797F20BE93A5CF3E5D0BBA0BB77CB88C249E54548CD02210",
+                              "size":  66,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "release artifact"
+                          },
+                          {
+                              "path":  "UNDIES-RELEASE-MANIFEST.json",
+                              "ownership_class":  "CORE_LAUNCHER",
+                              "sha256":  "F8E63965DAA4C5C7718BBDEFC06F896966130CC09B2A651D8662E39C2D8BCBDB",
+                              "size":  2972,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "release artifact"
+                          },
+                          {
+                              "path":  ".undies/active-version.json",
+                              "ownership_class":  "CORE_IMMUTABLE",
+                              "sha256":  "B82F2167792A427DD93241D58FCF0082945317E4BD5604A72AF37A29908D554E",
+                              "size":  239,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "install"
+                          },
+                          {
+                              "path":  ".undies/ownership-manifest.json",
+                              "ownership_class":  "CORE_IMMUTABLE",
+                              "sha256":  null,
+                              "size":  0,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "install"
+                          },
+                          {
+                              "path":  ".undies/core/0.3.0-alpha.2/UNDIES.core.ps1",
+                              "ownership_class":  "CORE_IMMUTABLE",
+                              "sha256":  "5DF1F5428C59151C047F0ABDC21210B335BB550FFA81F668740FFFFC3DD0304C",
+                              "size":  32964,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  true,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "release artifact"
+                          },
+                          {
+                              "path":  ".undies/core/0.3.0-alpha.2/CORE-MANIFEST.json",
+                              "ownership_class":  "CORE_IMMUTABLE",
+                              "sha256":  "F0F0A0091F887D323F459EA6EB0D37237948206915888436E6F88D60BC9CDA10",
+                              "size":  535,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  true,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "install"
+                          },
+                          {
+                              "path":  ".undies/core/0.3.0-alpha.2/CORE.sha256",
+                              "ownership_class":  "CORE_IMMUTABLE",
+                              "sha256":  "3C28825294E5D3E61D40417EE5C780B863D99BFDE822476CF67C3DBDDEAD1642",
+                              "size":  66,
+                              "mutable":  false,
+                              "may_be_upgraded":  true,
+                              "may_be_removed":  true,
+                              "user_modification_permitted":  false,
+                              "original_source_artifact":  "install"
+                          },
+                          {
+                              "path":  ".undies/project/project.json",
+                              "ownership_class":  "PROJECT_CONFIGURATION",
+                              "sha256":  "ABB884F84F2A55B1265F41E65020AA3F613A526CFA572214A3A0B08039DB29DC",
+                              "size":  330,
+                              "mutable":  true,
+                              "may_be_upgraded":  false,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  true,
+                              "original_source_artifact":  "project"
+                          },
+                          {
+                              "path":  ".undies/project/policies.json",
+                              "ownership_class":  "PROJECT_CONFIGURATION",
+                              "sha256":  "21A5BC9AF5B294FFF66967FF568DC9864E5CC01CD13C4BF94BB08E499005A501",
+                              "size":  169,
+                              "mutable":  true,
+                              "may_be_upgraded":  false,
+                              "may_be_removed":  false,
+                              "user_modification_permitted":  true,
+                              "original_source_artifact":  "project"
+                          }
+                      ],
+    "release_checksum":  "5DF1F5428C59151C047F0ABDC21210B335BB550FFA81F668740FFFFC3DD0304C",
+    "reverse_synchronization":  "DISABLED"
+}

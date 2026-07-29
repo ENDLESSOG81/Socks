@@ -1,0 +1,14 @@
+﻿{
+    "version":  "0.3.0-alpha.2",
+    "created_utc":  "2026-07-29T10:25:12.8806284Z",
+    "files":  [
+                  {
+                      "path":  ".undies/core/0.3.0-alpha.2/UNDIES.core.ps1",
+                      "sha256":  "5DF1F5428C59151C047F0ABDC21210B335BB550FFA81F668740FFFFC3DD0304C",
+                      "size":  32964,
+                      "ownership_class":  "CORE_IMMUTABLE"
+                  }
+              ],
+    "source_artifact":  "UNDIES.ps1",
+    "reverse_synchronization":  "DISABLED"
+}

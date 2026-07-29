@@ -1,0 +1,60 @@
+﻿{
+    "product_name":  "UNDIES",
+    "version":  "0.3.0-alpha.2",
+    "release_type":  "GitHub prerelease",
+    "build_date_utc":  "2026-07-29T08:38:48.0330268Z",
+    "source_commit":  "058ca13e6038132bc85d62e71a8b7d2de50dfcb3",
+    "tag":  "v0.3.0-alpha.2",
+    "packaging_method":  "build/package-undies.ps1 from build/portable-template.ps1",
+    "powershell_compatibility":  [
+                                     "PowerShell 7 preferred",
+                                     "Windows PowerShell 5.1 compatible where standard .NET APIs are available"
+                                 ],
+    "artifact_filename":  "UNDIES.ps1",
+    "artifact_size":  32964,
+    "sha256_checksum":  "5DF1F5428C59151C047F0ABDC21210B335BB550FFA81F668740FFFFC3DD0304C",
+    "supported_deployment_modes":  [
+                                       "empty-folder initialize",
+                                       "existing non-Git adoption",
+                                       "existing Git repository adoption",
+                                       "upgrade",
+                                       "repair",
+                                       "rollback",
+                                       "removal"
+                                   ],
+    "supported_upgrade_range":  [
+                                    "0.1.0-alpha.1",
+                                    "0.1.0-alpha.2",
+                                    "0.2.0-alpha.1",
+                                    "0.2.0-alpha.2",
+                                    "0.3.0-alpha.1",
+                                    "0.3.0-alpha.2"
+                                ],
+    "immutable_core":  true,
+    "runtime_isolation":  true,
+    "ownership_manifest":  true,
+    "project_isolation":  true,
+    "source_repository_isolation":  true,
+    "reverse_synchronization":  "DISABLED",
+    "required_dependencies":  [
+                                  "PowerShell",
+                                  "standard .NET APIs"
+                              ],
+    "external_connections":  [
+                                 "none required for portable operation"
+                             ],
+    "known_limitations":  [
+                              "alpha prerelease",
+                              "GitHub release publication may require authenticated external tooling",
+                              "project-specific test execution requires operator authorization"
+                          ],
+    "test_totals":  "UND-024 passed=48 failed=0 skipped=0; UND-025 passed=48 failed=0 skipped=0; regression passed=55 failed=0 skipped=0",
+    "pilot_result":  "DIRA fixture pending",
+    "compatible_previous_releases":  [
+                                         "0.2.0-alpha.2"
+                                     ],
+    "superseded_releases":  [
+                                "0.2.0-alpha.1"
+                            ],
+    "release_status":  "PRERELEASE"
+}
