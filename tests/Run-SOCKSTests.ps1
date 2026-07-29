@@ -196,6 +196,22 @@ try {
         $Checks = Get-SOCKSChecks -Config $Config -Environment $Env
         Assert-True (@($Checks | Where-Object id -eq 'discovery.environment').Count -eq 1) 'Discovery check should be registered.'
     }
+
+    Invoke-Test 'SOCKS-004 git evidence generated' {
+        $GitEvidence = Get-SOCKSGitEvidence -WorkspaceRoot $RepoRoot
+        Assert-True $GitEvidence.git_installed 'Git should be installed for this repository.'
+        Assert-True $GitEvidence.inside_work_tree 'Repository should be a work tree.'
+        Assert-True ($GitEvidence.commit -match '^[0-9a-f]{40}$') 'Commit should be identified.'
+    }
+
+    Invoke-Test 'SOCKS-004 git checks registered' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Env = Get-SOCKSEnvironment -Config $Config
+        $Checks = Get-SOCKSChecks -Config $Config -Environment $Env
+        foreach($Id in @('git.working_tree_clean','git.remote_status','git.detached_head','git.ignore_validation')){
+            Assert-True (@($Checks | Where-Object id -eq $Id).Count -eq 1) "$Id should be registered."
+        }
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

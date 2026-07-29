@@ -8,7 +8,9 @@
     "promote_optional_failures": false,
     "promoted_optional_checks": [],
     "disabled_checks": [],
-    "check_levels": {},
+    "check_levels": {
+      "git.working_tree_clean": "ADVISORY"
+    },
     "conditional_checks": {}
   },
   "validation": {

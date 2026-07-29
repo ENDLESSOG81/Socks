@@ -328,6 +328,63 @@ function Get-SOCKSDiscoveryEvidence {
     }
 }
 
+function Invoke-SOCKSGit {
+    param(
+        [Parameter(Mandatory=$true)][string]$WorkspaceRoot,
+        [Parameter(Mandatory=$true)][string[]]$Arguments
+    )
+
+    $Output = & git -C $WorkspaceRoot @Arguments 2>&1
+    return [ordered]@{ exit_code = $LASTEXITCODE; output = @($Output | ForEach-Object { "$_" }) }
+}
+
+function Get-SOCKSGitEvidence {
+    param([Parameter(Mandatory=$true)][string]$WorkspaceRoot)
+
+    $Inside = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('rev-parse','--is-inside-work-tree')
+    $Branch = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('branch','--show-current')
+    $Commit = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('rev-parse','HEAD')
+    $Integrity = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('fsck','--no-progress')
+    $Status = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('status','--porcelain=v1','--branch')
+    $Remote = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('remote','-v')
+    $Symbolic = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('symbolic-ref','-q','HEAD')
+    $Upstream = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('rev-parse','--abbrev-ref','--symbolic-full-name','@{u}')
+    $AheadBehind = if($Upstream.exit_code -eq 0 -and $Upstream.output.Count -gt 0){
+        Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('rev-list','--left-right','--count','HEAD...@{u}')
+    } else {
+        [ordered]@{ exit_code = 1; output = @() }
+    }
+    $IgnoredEvidence = Invoke-SOCKSGit -WorkspaceRoot $WorkspaceRoot -Arguments @('check-ignore','.socks/evidence/socks-readiness-placeholder.json')
+
+    $StatusLines = @($Status.output)
+    $ChangeLines = @($StatusLines | Where-Object { $_ -notmatch '^##' })
+    $Ahead = $null
+    $Behind = $null
+    if($AheadBehind.exit_code -eq 0 -and $AheadBehind.output.Count -gt 0){
+        $Parts = "$($AheadBehind.output[0])" -split '\s+'
+        if($Parts.Count -ge 2){ $Ahead = [int]$Parts[0]; $Behind = [int]$Parts[1] }
+    }
+
+    return [ordered]@{
+        git_installed = ($null -ne (Get-Command git -ErrorAction SilentlyContinue))
+        inside_work_tree = ($Inside.exit_code -eq 0 -and ($Inside.output -join '').Trim() -eq 'true')
+        branch = if($Branch.output.Count -gt 0){ ($Branch.output -join '').Trim() } else { $null }
+        commit = if($Commit.output.Count -gt 0){ ($Commit.output -join '').Trim() } else { $null }
+        repository_integrity_passed = ($Integrity.exit_code -eq 0)
+        detached_head = ($Symbolic.exit_code -ne 0)
+        upstream = if($Upstream.exit_code -eq 0 -and $Upstream.output.Count -gt 0){ ($Upstream.output -join '').Trim() } else { $null }
+        ahead = $Ahead
+        behind = $Behind
+        remotes = @($Remote.output)
+        working_tree_clean = ($ChangeLines.Count -eq 0)
+        working_tree_changes = $ChangeLines
+        ignore_validation = [ordered]@{
+            socks_evidence_ignored = ($IgnoredEvidence.exit_code -eq 0)
+            checked_path = '.socks/evidence/socks-readiness-placeholder.json'
+        }
+    }
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -388,6 +445,7 @@ function Get-SOCKSChecks {
 
     $Workspace = $Environment.workspace_root
     $EvidenceRoot = $Environment.evidence_root
+    $GitEvidence = Get-SOCKSGitEvidence -WorkspaceRoot $Workspace
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -416,9 +474,8 @@ function Get-SOCKSChecks {
             return @{status='FAIL';summary='Git executable was not found.';evidence=@{found=$false};failure_reason='git was not found on PATH.';remediation='Install Git or add Git to PATH.'}
         }.GetNewClosure()},
         @{ id='git.repository'; name='Current directory is a Git repository'; category='git'; requirement='REQUIRED'; body={
-            $Inside = & git -C $Workspace rev-parse --is-inside-work-tree 2>$null
-            if($LASTEXITCODE -eq 0 -and "$Inside".Trim() -eq 'true'){ return @{status='PASS';summary='Workspace is inside a Git work tree.';evidence=@{path=$Workspace;inside_work_tree=$true}} }
-            return @{status='FAIL';summary='Workspace is not a Git repository.';evidence=@{path=$Workspace;inside_work_tree=$false};failure_reason='git rev-parse could not confirm a work tree.';remediation='Initialize Git or choose a Git repository workspace.'}
+            if($GitEvidence.inside_work_tree -and $GitEvidence.repository_integrity_passed){ return @{status='PASS';summary='Workspace is a valid Git work tree.';evidence=$GitEvidence} }
+            return @{status='FAIL';summary='Workspace is not a valid Git repository.';evidence=$GitEvidence;failure_reason='Git work tree or integrity validation failed.';remediation='Initialize Git or repair repository metadata.'}
         }.GetNewClosure()},
         @{ id='git.branch'; name='Git branch can be identified'; category='git'; requirement='REQUIRED'; body={
             $Branch = (& git -C $Workspace branch --show-current 2>$null).Trim()
@@ -429,6 +486,23 @@ function Get-SOCKSChecks {
             $Commit = (& git -C $Workspace rev-parse HEAD 2>$null).Trim()
             if($LASTEXITCODE -eq 0 -and $Commit -match '^[0-9a-f]{40}$'){ return @{status='PASS';summary='Git commit identified.';evidence=@{commit=$Commit}} }
             return @{status='FAIL';summary='Git commit could not be identified.';evidence=@{commit=$Commit};failure_reason='HEAD could not be resolved to a commit.';remediation='Create an initial commit or repair Git metadata.'}
+        }.GetNewClosure()},
+        @{ id='git.working_tree_clean'; name='Git working tree cleanliness can be evaluated'; category='git'; requirement='ADVISORY'; body={
+            if($GitEvidence.working_tree_clean){ return @{status='PASS';summary='Git working tree is clean.';evidence=$GitEvidence} }
+            return @{status='WARN';summary='Git working tree has uncommitted or untracked changes.';evidence=$GitEvidence;remediation='Review git status before release or promote this check to REQUIRED for stricter policy.'}
+        }.GetNewClosure()},
+        @{ id='git.remote_status'; name='Git remote tracking status can be evaluated'; category='git'; requirement='OPTIONAL'; body={
+            if($null -eq $GitEvidence.upstream){ return @{status='WARN';summary='Git upstream tracking branch is not configured.';evidence=$GitEvidence;remediation='Set an upstream branch if remote freshness is required.'} }
+            if($GitEvidence.behind -gt 0){ return @{status='WARN';summary='Local branch is behind upstream.';evidence=$GitEvidence;remediation='Review and pull upstream changes when appropriate.'} }
+            return @{status='PASS';summary='Git upstream tracking status is available.';evidence=$GitEvidence}
+        }.GetNewClosure()},
+        @{ id='git.detached_head'; name='Detached HEAD detection'; category='git'; requirement='REQUIRED'; body={
+            if(-not $GitEvidence.detached_head){ return @{status='PASS';summary='Repository is on a branch, not detached HEAD.';evidence=$GitEvidence} }
+            return @{status='FAIL';summary='Repository is in detached HEAD state.';evidence=$GitEvidence;failure_reason='HEAD is detached.';remediation='Checkout a branch before continuing.'}
+        }.GetNewClosure()},
+        @{ id='git.ignore_validation'; name='Git ignore validation'; category='git'; requirement='OPTIONAL'; body={
+            if($GitEvidence.ignore_validation.socks_evidence_ignored){ return @{status='PASS';summary='SOCKS runtime evidence path is ignored.';evidence=$GitEvidence.ignore_validation} }
+            return @{status='WARN';summary='SOCKS runtime evidence path is not ignored.';evidence=$GitEvidence.ignore_validation;remediation='Add .socks/evidence/ to .gitignore.'}
         }.GetNewClosure()},
         @{ id='config.loaded'; name='Required SOCKS configuration can be loaded'; category='configuration'; requirement='REQUIRED'; body={
             return @{status='PASS';summary='Required SOCKS configuration was loaded and validated.';evidence=@{config_path=$Config.config_path;schema_version=$Config.schema_version;socks_version=$Config.socks_version;integrity=$Config.config_integrity;policy=$Config.policy}}
@@ -541,6 +615,7 @@ function New-SOCKSReport {
         end_timestamp = $EndTime.ToUniversalTime().ToString('o')
         duration_ms = [math]::Round(($EndTime - $StartTime).TotalMilliseconds, 3)
         discovery = $Environment.discovery
+        git = Get-SOCKSGitEvidence -WorkspaceRoot $Environment.workspace_root
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -641,4 +716,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
