@@ -180,6 +180,22 @@ try {
         $Gate = Get-SOCKSGateEvaluation -Results $Results -Policy @{ promote_optional_failures=$false; promoted_optional_checks=@('optional.promoted') }
         Assert-Equal 'FAIL' $Gate.status 'Promoted optional failure should fail gate.'
     }
+
+    Invoke-Test 'SOCKS-003 discovery evidence generated safely' {
+        $Discovery = Get-SOCKSDiscoveryEvidence -WorkspaceRoot $RepoRoot
+        Assert-True ($Discovery.operating_system.version.Length -gt 0) 'OS version should be present.'
+        Assert-True ($Discovery.cpu.processor_count -ge 1) 'CPU count should be present.'
+        Assert-True ($Discovery.environment_variables.count -ge 1) 'Environment variable names should be counted.'
+        $Json = $Discovery | ConvertTo-Json -Depth 12
+        Assert-True ($Json -notmatch '(?i)password=|token=|secret=') 'Discovery should not include environment variable values.'
+    }
+
+    Invoke-Test 'SOCKS-003 discovery check registered' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Env = Get-SOCKSEnvironment -Config $Config
+        $Checks = Get-SOCKSChecks -Config $Config -Environment $Env
+        Assert-True (@($Checks | Where-Object id -eq 'discovery.environment').Count -eq 1) 'Discovery check should be registered.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

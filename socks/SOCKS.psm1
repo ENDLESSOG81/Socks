@@ -261,6 +261,70 @@ function Get-SOCKSEnvironment {
         runtime = 'PowerShell'
         platform = [System.Environment]::OSVersion.VersionString
         undies_session_id = Get-SOCKSUndiesSession -WorkspaceRoot $ResolvedWorkspace
+        discovery = Get-SOCKSDiscoveryEvidence -WorkspaceRoot $ResolvedWorkspace
+    }
+}
+
+function Get-SOCKSDiscoveryEvidence {
+    param([Parameter(Mandatory=$true)][string]$WorkspaceRoot)
+
+    $DriveRoot = [System.IO.Path]::GetPathRoot($WorkspaceRoot)
+    $Drive = $null
+    try { $Drive = Get-PSDrive -Name $DriveRoot.Substring(0,1) -ErrorAction Stop } catch { }
+
+    $Network = @()
+    try {
+        $Network = @(Get-NetIPConfiguration -ErrorAction Stop | ForEach-Object {
+            [ordered]@{
+                interface_alias = $_.InterfaceAlias
+                interface_description = $_.InterfaceDescription
+                ipv4_present = ($null -ne $_.IPv4Address)
+                ipv6_present = ($null -ne $_.IPv6Address)
+            }
+        })
+    } catch {
+        $Network = @([ordered]@{ unavailable = $true; reason = 'Network interface discovery API unavailable.' })
+    }
+
+    $EnvNames = [Environment]::GetEnvironmentVariables().Keys | Sort-Object | ForEach-Object {
+        if("$_" -match '(?i)(secret|token|password|credential|api[_-]?key|private[_-]?key)'){ '[REDACTED_NAME]' } else { "$_" }
+    }
+
+    $WorkspaceItem = Get-Item -LiteralPath $WorkspaceRoot -ErrorAction SilentlyContinue
+    return [ordered]@{
+        operating_system = [ordered]@{
+            platform = [System.Environment]::OSVersion.Platform.ToString()
+            version = [System.Environment]::OSVersion.VersionString
+            is_64_bit_os = [System.Environment]::Is64BitOperatingSystem
+            machine_name = [System.Environment]::MachineName
+        }
+        runtimes = [ordered]@{
+            powershell = $PSVersionTable.PSVersion.ToString()
+            dotnet_clr = [System.Environment]::Version.ToString()
+        }
+        cpu = [ordered]@{
+            processor_count = [System.Environment]::ProcessorCount
+            is_64_bit_process = [System.Environment]::Is64BitProcess
+        }
+        memory = [ordered]@{
+            working_set_bytes = [System.Environment]::WorkingSet
+        }
+        disk = [ordered]@{
+            root = $DriveRoot
+            free_bytes = if($Drive){ $Drive.Free } else { $null }
+            used_bytes = if($Drive){ $Drive.Used } else { $null }
+        }
+        network_interfaces = $Network
+        environment_variables = [ordered]@{
+            count = @($EnvNames).Count
+            names = @($EnvNames)
+        }
+        workspace = [ordered]@{
+            path = $WorkspaceRoot
+            exists = ($null -ne $WorkspaceItem)
+            created_utc = if($WorkspaceItem){ $WorkspaceItem.CreationTimeUtc.ToString('o') } else { $null }
+            modified_utc = if($WorkspaceItem){ $WorkspaceItem.LastWriteTimeUtc.ToString('o') } else { $null }
+        }
     }
 }
 
@@ -381,6 +445,13 @@ function Get-SOCKSChecks {
             Set-Content -LiteralPath $Probe -Value 'SOCKS evidence probe' -NoNewline -ErrorAction Stop
             Remove-Item -LiteralPath $Probe -Force -ErrorAction SilentlyContinue
             return @{status='PASS';summary='Evidence output directory is available.';evidence=@{path=$EvidenceRoot;available=$true}}
+        }.GetNewClosure()},
+        @{ id='discovery.environment'; name='Environment discovery evidence can be generated'; category='discovery'; requirement='REQUIRED'; body={
+            $Discovery = $Environment.discovery
+            if($null -ne $Discovery -and $Discovery.operating_system.version -and $Discovery.cpu.processor_count -ge 1){
+                return @{status='PASS';summary='Environment discovery evidence was generated.';evidence=$Discovery}
+            }
+            return @{status='FAIL';summary='Environment discovery evidence is incomplete.';evidence=$Discovery;failure_reason='Required discovery fields were unavailable.';remediation='Run SOCKS in a local PowerShell environment with standard system APIs.'}
         }.GetNewClosure()}
     ) | Where-Object { Test-SOCKSCheckEnabled -CheckId $_.id -Policy $Config.policy } | ForEach-Object {
         $_.requirement = Resolve-SOCKSCheckRequirement -CheckId $_.id -DefaultRequirement $_.requirement -Policy $Config.policy
@@ -469,6 +540,7 @@ function New-SOCKSReport {
         start_timestamp = $StartTime.ToUniversalTime().ToString('o')
         end_timestamp = $EndTime.ToUniversalTime().ToString('o')
         duration_ms = [math]::Round(($EndTime - $StartTime).TotalMilliseconds, 3)
+        discovery = $Environment.discovery
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -569,4 +641,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
