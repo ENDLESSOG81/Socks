@@ -821,7 +821,7 @@ function Get-SOCKSChecks {
                 return @{status='FAIL';summary='One or more required runtimes are missing.';evidence=$RuntimeEvidence;failure_reason='Required runtime command was not found.';remediation='Install the missing required runtime or adjust SOCKS dependency configuration.'}
             }
             if($MissingNonRequired.Count -gt 0){
-                return @{status='WARN';summary='One or more non-required runtimes are missing.';evidence=$RuntimeEvidence;remediation='Install optional runtimes if project policy needs them.'}
+                return @{status='PASS';summary='Required runtimes were validated; non-required runtimes may be unavailable.';evidence=$RuntimeEvidence;remediation='Install optional or advisory runtimes if project policy needs them.'}
             }
             return @{status='PASS';summary='Configured runtimes and dependencies were validated.';evidence=$RuntimeEvidence}
         }.GetNewClosure()},
