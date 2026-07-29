@@ -134,6 +134,8 @@ try {
         $Result = Invoke-SOCKSReadiness -ConfigPath (Join-Path $RepoRoot 'socks.config.json') -WorkspacePath $RepoRoot -EvidenceRoot $EvidenceRoot -ReportPrefix 'test-report'
         Assert-True (Test-Path -LiteralPath $Result.reports.json) 'JSON report should exist.'
         Assert-True (Test-Path -LiteralPath $Result.reports.markdown) 'Markdown report should exist.'
+        Assert-True (Test-Path -LiteralPath $Result.reports.html) 'HTML report should exist.'
+        Assert-True (Test-Path -LiteralPath $Result.reports.summary) 'Summary report should exist.'
     }
 
     Invoke-Test 'exit-code behavior' {
@@ -284,6 +286,15 @@ try {
         $Config.plugins.root = $PluginRoot
         $Evidence = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $RepoRoot
         Assert-Equal 0 $Evidence.valid_count 'Invalid plugin should not validate.'
+    }
+
+    Invoke-Test 'SOCKS-009 report statistics and timeline generated' {
+        $EvidenceRoot = Join-Path $TempRoot 'reporting-engine'
+        $Result = Invoke-SOCKSReadiness -ConfigPath (Join-Path $RepoRoot 'socks.config.json') -WorkspacePath $RepoRoot -EvidenceRoot $EvidenceRoot -ReportPrefix 'reporting'
+        Assert-True ($Result.report.statistics.total -ge 1) 'Statistics should include total checks.'
+        Assert-True ($Result.report.timeline.Count -eq $Result.report.statistics.total) 'Timeline should include each check.'
+        Assert-True (Test-Path -LiteralPath $Result.reports.html) 'HTML report should be written.'
+        Assert-True (Test-Path -LiteralPath $Result.reports.summary) 'Summary report should be written.'
     }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue

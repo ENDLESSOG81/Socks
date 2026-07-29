@@ -875,6 +875,26 @@ function New-SOCKSReport {
     $Branch = Get-SOCKSValue -Source (Get-SOCKSValue -Source $BranchResult -Name 'evidence') -Name 'branch'
     $Commit = Get-SOCKSValue -Source (Get-SOCKSValue -Source $CommitResult -Name 'evidence') -Name 'commit'
 
+    $Timeline = @($Results | ForEach-Object {
+        [ordered]@{ id=$_.id; status=$_.status; start_timestamp=$_.start_timestamp; end_timestamp=$_.end_timestamp; duration_ms=$_.duration_ms }
+    })
+    $Stats = [ordered]@{
+        total = @($Results).Count
+        pass = @($Results | Where-Object status -eq 'PASS').Count
+        warn = @($Results | Where-Object status -eq 'WARN').Count
+        fail = @($Results | Where-Object status -eq 'FAIL').Count
+        skipped = @($Results | Where-Object status -eq 'SKIPPED').Count
+        error = @($Results | Where-Object status -eq 'ERROR').Count
+        required = @($Results | Where-Object requirement_level -eq 'REQUIRED').Count
+        optional = @($Results | Where-Object requirement_level -eq 'OPTIONAL').Count
+        advisory = @($Results | Where-Object requirement_level -eq 'ADVISORY').Count
+    }
+    $FailureAnalysis = [ordered]@{
+        blocking_count = @($Gate.blocking_conditions).Count
+        warning_count = @($Gate.warnings).Count
+        failed_categories = @($Results | Where-Object { $_.status -in @('FAIL','ERROR','WARN') } | ForEach-Object { $_.category } | Select-Object -Unique)
+    }
+
     return [ordered]@{
         socks_version = $script:SOCKSVersion
         config_socks_version = $Config.socks_version
@@ -891,6 +911,9 @@ function New-SOCKSReport {
         configuration_security = Get-SOCKSConfigurationSecretEvidence -Config $Config
         connectivity = Get-SOCKSConnectivityEvidence -Config $Config
         plugins = Get-SOCKSPluginEvidence -Config $Config -WorkspaceRoot $Environment.workspace_root
+        timeline = $Timeline
+        statistics = $Stats
+        failure_analysis = $FailureAnalysis
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -899,8 +922,36 @@ function New-SOCKSReport {
         integrity = [ordered]@{
             algorithm = 'SHA256'
             payload_sha256_excluding_integrity = $null
+            json_file_sha256 = $null
+            markdown_file_sha256 = $null
+            html_file_sha256 = $null
+            summary_file_sha256 = $null
         }
     }
+}
+
+function ConvertTo-SOCKSHtml {
+    param([Parameter(Mandatory=$true)]$Report)
+
+    $Rows = @($Report.check_results | ForEach-Object {
+        "<tr><td>$([System.Web.HttpUtility]::HtmlEncode($_.status))</td><td>$([System.Web.HttpUtility]::HtmlEncode($_.id))</td><td>$([System.Web.HttpUtility]::HtmlEncode($_.requirement_level))</td><td>$([System.Web.HttpUtility]::HtmlEncode($_.summary))</td></tr>"
+    }) -join [Environment]::NewLine
+    return @"
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>SOCKS Readiness Report</title><style>body{font-family:Segoe UI,Arial,sans-serif;margin:2rem;line-height:1.4}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:.4rem;text-align:left}.PASS{color:green}.WARN{color:#8a6500}.FAIL,.ERROR{color:#b00020}</style></head>
+<body>
+<h1>SOCKS Readiness Report</h1>
+<p><strong>Gate:</strong> <span class="$($Report.gate.status)">$($Report.gate.status)</span></p>
+<p><strong>Repository:</strong> $([System.Web.HttpUtility]::HtmlEncode($Report.repository_path))</p>
+<p><strong>Commit:</strong> $([System.Web.HttpUtility]::HtmlEncode($Report.git_commit))</p>
+<p><strong>Checks:</strong> $($Report.statistics.total), pass $($Report.statistics.pass), warn $($Report.statistics.warn), fail $($Report.statistics.fail), error $($Report.statistics.error)</p>
+<table><thead><tr><th>Status</th><th>Check</th><th>Requirement</th><th>Summary</th></tr></thead><tbody>
+$Rows
+</tbody></table>
+</body>
+</html>
+"@
 }
 
 function Save-SOCKSReports {
@@ -918,8 +969,14 @@ function Save-SOCKSReports {
     $Base = "$ReportPrefix-$Stamp"
     $JsonPath = Join-Path $EvidenceRoot ($Base + '.json')
     $MarkdownPath = Join-Path $EvidenceRoot ($Base + '.md')
+    $HtmlPath = Join-Path $EvidenceRoot ($Base + '.html')
+    $SummaryPath = Join-Path $EvidenceRoot ($Base + '.summary.json')
 
     $Report.integrity.payload_sha256_excluding_integrity = $null
+    $Report.integrity.json_file_sha256 = $null
+    $Report.integrity.markdown_file_sha256 = $null
+    $Report.integrity.html_file_sha256 = $null
+    $Report.integrity.summary_file_sha256 = $null
     $Json = Protect-SOCKSSecret $Report | ConvertTo-Json -Depth 20
     $Hash = Get-SOCKSSha256Text -Text $Json
     $Report.integrity.payload_sha256_excluding_integrity = $Hash
@@ -951,8 +1008,30 @@ function Save-SOCKSReports {
         $Lines += "- [$($Result.status)] $($Result.id) ($($Result.requirement_level)): $($Result.summary)"
     }
     Set-Content -LiteralPath $MarkdownPath -Value (Protect-SOCKSSecret ($Lines -join [Environment]::NewLine)) -Encoding UTF8
+    $Html = ConvertTo-SOCKSHtml -Report (Protect-SOCKSSecret $Report)
+    Set-Content -LiteralPath $HtmlPath -Value $Html -Encoding UTF8
+    $Summary = [ordered]@{
+        socks_version = $Report.socks_version
+        repository_path = $Report.repository_path
+        git_branch = $Report.git_branch
+        git_commit = $Report.git_commit
+        gate_status = $Report.gate.status
+        check_statistics = $Report.statistics
+        blocking_conditions = $Report.blocking_conditions
+        warnings = $Report.warnings
+        started = $Report.start_timestamp
+        ended = $Report.end_timestamp
+    }
+    Set-Content -LiteralPath $SummaryPath -Value ((Protect-SOCKSSecret $Summary) | ConvertTo-Json -Depth 12) -Encoding UTF8
 
-    return [ordered]@{ json = $JsonPath; markdown = $MarkdownPath; payload_sha256_excluding_integrity = $Hash }
+    $Report.integrity.json_file_sha256 = (Get-FileHash -LiteralPath $JsonPath -Algorithm SHA256).Hash
+    $Report.integrity.markdown_file_sha256 = (Get-FileHash -LiteralPath $MarkdownPath -Algorithm SHA256).Hash
+    $Report.integrity.html_file_sha256 = (Get-FileHash -LiteralPath $HtmlPath -Algorithm SHA256).Hash
+    $Report.integrity.summary_file_sha256 = (Get-FileHash -LiteralPath $SummaryPath -Algorithm SHA256).Hash
+    $Json = Protect-SOCKSSecret $Report | ConvertTo-Json -Depth 20
+    Set-Content -LiteralPath $JsonPath -Value $Json -Encoding UTF8
+
+    return [ordered]@{ json = $JsonPath; markdown = $MarkdownPath; html = $HtmlPath; summary = $SummaryPath; payload_sha256_excluding_integrity = $Hash }
 }
 
 function Invoke-SOCKSReadiness {
