@@ -126,6 +126,9 @@ function Normalize-SOCKSPolicy {
     if(-not $Policy.Contains('disabled_checks') -or $null -eq $Policy.disabled_checks){ $Policy.disabled_checks = @() } else { $Policy.disabled_checks = @($Policy.disabled_checks) }
     if(-not $Policy.Contains('check_levels') -or $null -eq $Policy.check_levels){ $Policy.check_levels = [ordered]@{} }
     if(-not $Policy.Contains('conditional_checks') -or $null -eq $Policy.conditional_checks){ $Policy.conditional_checks = [ordered]@{} }
+    if(-not $Policy.Contains('check_dependencies') -or $null -eq $Policy.check_dependencies){ $Policy.check_dependencies = [ordered]@{} }
+    if(-not $Policy.Contains('warning_promotion_threshold')){ $Policy.warning_promotion_threshold = $null }
+    if(-not $Policy.Contains('composite_policies') -or $null -eq $Policy.composite_policies){ $Policy.composite_policies = @() } else { $Policy.composite_policies = @($Policy.composite_policies) }
     return $Policy
 }
 
@@ -232,7 +235,27 @@ function Test-SOCKSCheckEnabled {
         [Parameter(Mandatory=$true)]$Policy
     )
 
-    return (@($Policy.disabled_checks) -notcontains $CheckId)
+    if(@($Policy.disabled_checks) -contains $CheckId){ return $false }
+    if($Policy.conditional_checks -is [System.Collections.IDictionary] -and $Policy.conditional_checks.Contains($CheckId)){
+        return [bool]$Policy.conditional_checks[$CheckId]
+    }
+    return $true
+}
+
+function Get-SOCKSDependencyGraph {
+    param(
+        [Parameter(Mandatory=$true)]$Results,
+        [Parameter(Mandatory=$true)]$Policy
+    )
+
+    $Policy = Normalize-SOCKSPolicy -Policy $Policy
+    return @($Results | ForEach-Object {
+        $Dependencies = @()
+        if($Policy.check_dependencies -is [System.Collections.IDictionary] -and $Policy.check_dependencies.Contains($_.id)){
+            $Dependencies = @($Policy.check_dependencies[$_.id])
+        }
+        [ordered]@{ id=$_.id; dependencies=$Dependencies; status=$_.status; requirement_level=$_.requirement_level }
+    })
 }
 
 function Get-SOCKSEnvironment {
@@ -827,14 +850,17 @@ function Get-SOCKSGateEvaluation {
     $PromoteOptional = [bool]$Policy.promote_optional_failures
     $PromotedIds = @($Policy.promoted_optional_checks)
     $PromotedOptionalFailures = @($OptionalFailures | Where-Object { $PromotedIds -contains $_.id })
+    $WarningThreshold = $Policy.warning_promotion_threshold
+    $ThresholdPromoted = ($null -ne $WarningThreshold -and $OptionalFailures.Count -ge [int]$WarningThreshold -and $OptionalFailures.Count -gt 0)
+    $DependencyGraph = Get-SOCKSDependencyGraph -Results $Results -Policy $Policy
 
     if($Blocking.Count -gt 0){
         $Status = 'FAIL'
         $Reason = 'One or more required checks failed or errored.'
-    } elseif(($PromoteOptional -or $PromotedOptionalFailures.Count -gt 0) -and $OptionalFailures.Count -gt 0){
+    } elseif(($PromoteOptional -or $PromotedOptionalFailures.Count -gt 0 -or $ThresholdPromoted) -and $OptionalFailures.Count -gt 0){
         $Status = 'FAIL'
-        $Reason = 'Policy promoted optional check failures to blocking failures.'
-        if($PromoteOptional){ $Blocking = $OptionalFailures } else { $Blocking = $PromotedOptionalFailures }
+        $Reason = 'Policy promoted optional check failures or warnings to blocking failures.'
+        if($PromoteOptional -or $ThresholdPromoted){ $Blocking = $OptionalFailures } else { $Blocking = $PromotedOptionalFailures }
     } elseif($OptionalFailures.Count -gt 0){
         $Status = 'WARN'
         $Reason = 'Required checks passed, but optional checks produced warnings or failures.'
@@ -843,9 +869,12 @@ function Get-SOCKSGateEvaluation {
         $Reason = 'All required checks passed.'
     }
 
+    $Confidence = if(@($Results).Count -eq 0){ 0 } else { [math]::Round((@($Results | Where-Object status -eq 'PASS').Count / @($Results).Count) * 100, 2) }
+
     return [ordered]@{
         status = $Status
         reason = $Reason
+        confidence_score = $Confidence
         blocking_conditions = @($Blocking | ForEach-Object { [ordered]@{ id=$_.id; status=$_.status; summary=$_.summary; remediation=$_.remediation } })
         warnings = @($OptionalFailures | ForEach-Object { [ordered]@{ id=$_.id; status=$_.status; summary=$_.summary; remediation=$_.remediation } })
         advisory = @($AdvisoryFailures | ForEach-Object { [ordered]@{ id=$_.id; status=$_.status; summary=$_.summary; remediation=$_.remediation } })
@@ -855,6 +884,11 @@ function Get-SOCKSGateEvaluation {
             advisory_warning_or_failure_count = $AdvisoryFailures.Count
             promote_optional_failures = $PromoteOptional
             promoted_optional_checks = $PromotedIds
+            warning_promotion_threshold = $WarningThreshold
+            composite_policies = @($Policy.composite_policies)
+            dependency_graph = $DependencyGraph
+            deterministic = $true
+            parallel_execution = [ordered]@{ supported = $true; used = $false; reason = 'Sequential execution preserves deterministic evidence order in SOCKS v0.1.x.' }
             calculation = $Reason
         }
     }
@@ -1070,4 +1104,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSPluginEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSPluginEvidence,Get-SOCKSDependencyGraph,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

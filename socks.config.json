@@ -11,7 +11,10 @@
     "check_levels": {
       "git.working_tree_clean": "ADVISORY"
     },
-    "conditional_checks": {}
+    "conditional_checks": {},
+    "check_dependencies": {},
+    "warning_promotion_threshold": null,
+    "composite_policies": []
   },
   "validation": {
     "required_keys": [

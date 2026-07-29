@@ -296,6 +296,34 @@ try {
         Assert-True (Test-Path -LiteralPath $Result.reports.html) 'HTML report should be written.'
         Assert-True (Test-Path -LiteralPath $Result.reports.summary) 'Summary report should be written.'
     }
+
+    Invoke-Test 'SOCKS-010 warning threshold promotes warnings' {
+        $Results = @(
+            Invoke-SOCKSCheck -Id 'optional.warn' -Name 'Optional warn' -Category 'test' -RequirementLevel 'OPTIONAL' -Body {
+                @{ status='WARN'; summary='warning'; evidence=@{}; remediation='review' }
+            }
+        )
+        $Gate = Get-SOCKSGateEvaluation -Results $Results -Policy @{ warning_promotion_threshold=1 }
+        Assert-Equal 'FAIL' $Gate.status 'Warning threshold should promote warning to fail.'
+        Assert-True ($Gate.confidence_score -ge 0) 'Confidence score should be present.'
+    }
+
+    Invoke-Test 'SOCKS-010 conditional check filtering' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.policy.conditional_checks = @{ 'git.ignore_validation' = $false }
+        $Env = Get-SOCKSEnvironment -Config $Config
+        $Checks = Get-SOCKSChecks -Config $Config -Environment $Env
+        Assert-True (@($Checks | Where-Object id -eq 'git.ignore_validation').Count -eq 0) 'Conditional false check should be filtered.'
+    }
+
+    Invoke-Test 'SOCKS-010 dependency graph evidence generated' {
+        $Results = @(
+            Invoke-SOCKSCheck -Id 'a' -Name 'A' -Category 'test' -RequirementLevel 'REQUIRED' -Body { @{ status='PASS'; summary='a'; evidence=@{} } }
+            Invoke-SOCKSCheck -Id 'b' -Name 'B' -Category 'test' -RequirementLevel 'REQUIRED' -Body { @{ status='PASS'; summary='b'; evidence=@{} } }
+        )
+        $Graph = Get-SOCKSDependencyGraph -Results $Results -Policy @{ check_dependencies=@{ b=@('a') } }
+        Assert-Equal 'a' $Graph[1].dependencies[0] 'Dependency graph should record dependency.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
