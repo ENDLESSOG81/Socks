@@ -40,5 +40,9 @@
       "REPLACE_ME",
       "YOUR_"
     ]
+  },
+  "external_connectivity": {
+    "default_timeout_ms": 5000,
+    "connectors": []
   }
 }

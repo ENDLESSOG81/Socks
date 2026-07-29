@@ -244,6 +244,22 @@ try {
         Assert-Equal 1 $Evidence.placeholder_count 'Placeholder should be detected.'
         Assert-Equal '[REDACTED]' $Evidence.required_settings[0].value 'Secret value should redact.'
     }
+
+    Invoke-Test 'SOCKS-007 connector framework supports known connector types' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.external_connectivity.connectors = @(@{ id='github-readiness'; type='github'; enabled=$false; requirement='OPTIONAL' })
+        $Evidence = Get-SOCKSConnectivityEvidence -Config $Config
+        Assert-Equal 1 $Evidence.connector_count 'Connector should be discovered.'
+        Assert-True $Evidence.connectors[0].supported_type 'GitHub connector type should be supported.'
+        Assert-Equal 'SKIPPED' $Evidence.connectors[0].status 'Disabled connector should be skipped.'
+    }
+
+    Invoke-Test 'SOCKS-007 unsupported connector type is identified' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.external_connectivity.connectors = @(@{ id='unknown'; type='not-a-real-type'; enabled=$true; requirement='OPTIONAL' })
+        $Evidence = Get-SOCKSConnectivityEvidence -Config $Config
+        Assert-True (-not $Evidence.connectors[0].supported_type) 'Unsupported connector should be identified.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

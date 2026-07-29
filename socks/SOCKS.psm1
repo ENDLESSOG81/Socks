@@ -487,6 +487,43 @@ function Get-SOCKSConfigurationSecretEvidence {
     }
 }
 
+function Get-SOCKSConnectorDefinitions {
+    param([Parameter(Mandatory=$true)]$Config)
+
+    $External = if($Config.Contains('external_connectivity') -and $Config.external_connectivity -is [System.Collections.IDictionary]){ $Config.external_connectivity } else { [ordered]@{} }
+    return @(Get-SOCKSValue -Source $External -Name 'connectors' -Default @())
+}
+
+function Get-SOCKSConnectivityEvidence {
+    param([Parameter(Mandatory=$true)]$Config)
+
+    $SupportedTypes = @('github','discord','supabase','postgresql','rest','ai-provider','custom')
+    $Connectors = Get-SOCKSConnectorDefinitions -Config $Config
+    $Evidence = @($Connectors | ForEach-Object {
+        $Id = Get-SOCKSValue -Source $_ -Name 'id' -Default 'unnamed-connector'
+        $Type = "$(Get-SOCKSValue -Source $_ -Name 'type' -Default 'custom')".ToLowerInvariant()
+        $Enabled = [bool](Get-SOCKSValue -Source $_ -Name 'enabled' -Default $false)
+        $Requirement = "$(Get-SOCKSValue -Source $_ -Name 'requirement' -Default 'OPTIONAL')".ToUpperInvariant()
+        if($Requirement -notin @('REQUIRED','OPTIONAL','ADVISORY')){ $Requirement = 'OPTIONAL' }
+        [ordered]@{
+            id = Protect-SOCKSSecret $Id
+            type = $Type
+            supported_type = ($SupportedTypes -contains $Type)
+            enabled = $Enabled
+            requirement = $Requirement
+            status = if(-not $Enabled){ 'SKIPPED' } elseif($SupportedTypes -contains $Type){ 'REGISTERED' } else { 'ERROR' }
+            credentials_present = 'NOT_INSPECTED'
+        }
+    })
+
+    return [ordered]@{
+        supported_types = $SupportedTypes
+        connector_count = $Evidence.Count
+        enabled_count = @($Evidence | Where-Object enabled).Count
+        connectors = $Evidence
+    }
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -550,6 +587,7 @@ function Get-SOCKSChecks {
     $GitEvidence = Get-SOCKSGitEvidence -WorkspaceRoot $Workspace
     $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
     $SecretEvidence = Get-SOCKSConfigurationSecretEvidence -Config $Config
+    $ConnectivityEvidence = Get-SOCKSConnectivityEvidence -Config $Config
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -634,6 +672,13 @@ function Get-SOCKSChecks {
                 return @{status='FAIL';summary='Configuration placeholder values were detected.';evidence=$SecretEvidence;failure_reason='Placeholder configuration values are not ready for progression.';remediation='Replace placeholder configuration values with environment-specific values outside source control.'}
             }
             return @{status='PASS';summary='Required secret/configuration presence was validated without exposing values.';evidence=$SecretEvidence}
+        }.GetNewClosure()},
+        @{ id='connectivity.framework'; name='External connectivity framework can register configured connectors'; category='connectivity'; requirement='REQUIRED'; body={
+            $Unsupported = @($ConnectivityEvidence.connectors | Where-Object { -not $_.supported_type })
+            if($Unsupported.Count -gt 0){
+                return @{status='FAIL';summary='Unsupported connector types were configured.';evidence=$ConnectivityEvidence;failure_reason='Connector type is not supported by SOCKS connectivity framework.';remediation='Use a supported connector type or implement a plugin connector.'}
+            }
+            return @{status='PASS';summary='Connectivity framework is available and connector configuration is valid.';evidence=$ConnectivityEvidence}
         }.GetNewClosure()},
         @{ id='evidence.directory'; name='Evidence output directory can be created or accessed'; category='evidence'; requirement='REQUIRED'; body={
             if(-not (Test-Path -LiteralPath $EvidenceRoot)){
@@ -742,6 +787,7 @@ function New-SOCKSReport {
         git = Get-SOCKSGitEvidence -WorkspaceRoot $Environment.workspace_root
         runtimes = Get-SOCKSRuntimeEvidence -Config $Config
         configuration_security = Get-SOCKSConfigurationSecretEvidence -Config $Config
+        connectivity = Get-SOCKSConnectivityEvidence -Config $Config
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -842,4 +888,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSConfigurationSecretEvidence,Get-SOCKSConnectivityEvidence,Get-SOCKSConnectorDefinitions,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
