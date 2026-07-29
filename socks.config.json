@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "socks_version": "0.1.0-alpha.1",
+  "workspace_root": ".",
+  "evidence_root": ".socks/evidence",
+  "required_runtime": "PowerShell",
+  "policy": {
+    "promote_optional_failures": false
+  }
+}
