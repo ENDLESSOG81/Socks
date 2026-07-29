@@ -385,6 +385,54 @@ function Get-SOCKSGitEvidence {
     }
 }
 
+function Get-SOCKSRuntimeEvidence {
+    param([Parameter(Mandatory=$true)]$Config)
+
+    $Configured = @()
+    if($Config.Contains('dependencies') -and $Config.dependencies -is [System.Collections.IDictionary] -and $Config.dependencies.Contains('runtimes')){
+        $Configured = @($Config.dependencies.runtimes)
+    }
+    if($Configured.Count -eq 0){
+        $Configured = @(
+            @{ id='powershell'; command='powershell'; version_args=@('-NoProfile','-Command','$PSVersionTable.PSVersion.ToString()'); requirement='REQUIRED' },
+            @{ id='git'; command='git'; version_args=@('--version'); requirement='REQUIRED' }
+        )
+    }
+
+    return @($Configured | ForEach-Object {
+        $Id = Get-SOCKSValue -Source $_ -Name 'id' -Default (Get-SOCKSValue -Source $_ -Name 'command')
+        $Command = Get-SOCKSValue -Source $_ -Name 'command'
+        $VersionArgs = @(Get-SOCKSValue -Source $_ -Name 'version_args' -Default @('--version'))
+        $Requirement = "$(Get-SOCKSValue -Source $_ -Name 'requirement' -Default 'ADVISORY')".ToUpperInvariant()
+        if($Requirement -notin @('REQUIRED','OPTIONAL','ADVISORY')){ $Requirement = 'ADVISORY' }
+        $Resolved = Get-Command $Command -ErrorAction SilentlyContinue
+        $Version = $null
+        $ExitCode = $null
+        $ErrorText = $null
+        if($null -ne $Resolved){
+            try {
+                $Output = & $Command @VersionArgs 2>&1
+                $ExitCode = $LASTEXITCODE
+                $Version = (@($Output | ForEach-Object { "$_" }) -join ' ').Trim()
+            } catch {
+                $ExitCode = 1
+                $ErrorText = $_.Exception.Message
+            }
+        }
+        $Usable = ($null -ne $Resolved -and ($null -eq $ExitCode -or $ExitCode -eq 0))
+        [ordered]@{
+            id = $Id
+            command = $Command
+            requirement = $Requirement
+            found = $Usable
+            source = if($Resolved){ $Resolved.Source } else { $null }
+            version = $Version
+            version_exit_code = $ExitCode
+            error = Protect-SOCKSSecret $ErrorText
+        }
+    })
+}
+
 function New-SOCKSCheckResult {
     param(
         [Parameter(Mandatory=$true)][string]$Id,
@@ -446,6 +494,7 @@ function Get-SOCKSChecks {
     $Workspace = $Environment.workspace_root
     $EvidenceRoot = $Environment.evidence_root
     $GitEvidence = Get-SOCKSGitEvidence -WorkspaceRoot $Workspace
+    $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
 
     return @(
         @{ id='workspace.exists'; name='Workspace path exists'; category='workspace'; requirement='REQUIRED'; body={
@@ -510,6 +559,17 @@ function Get-SOCKSChecks {
         @{ id='runtime.identified'; name='Required runtime can be identified'; category='runtime'; requirement='REQUIRED'; body={
             if($Environment.runtime -eq $Config.required_runtime){ return @{status='PASS';summary='Required runtime identified.';evidence=@{required_runtime=$Config.required_runtime;powershell_version=$Environment.powershell_version;platform=$Environment.platform}} }
             return @{status='FAIL';summary='Required runtime was not identified.';evidence=@{required_runtime=$Config.required_runtime;actual_runtime=$Environment.runtime};failure_reason='Runtime mismatch.';remediation='Run SOCKS with the configured runtime.'}
+        }.GetNewClosure()},
+        @{ id='runtime.dependencies'; name='Configured runtimes and dependencies can be validated'; category='runtime'; requirement='REQUIRED'; body={
+            $MissingRequired = @($RuntimeEvidence | Where-Object { $_.requirement -eq 'REQUIRED' -and -not $_.found })
+            $MissingNonRequired = @($RuntimeEvidence | Where-Object { $_.requirement -ne 'REQUIRED' -and -not $_.found })
+            if($MissingRequired.Count -gt 0){
+                return @{status='FAIL';summary='One or more required runtimes are missing.';evidence=$RuntimeEvidence;failure_reason='Required runtime command was not found.';remediation='Install the missing required runtime or adjust SOCKS dependency configuration.'}
+            }
+            if($MissingNonRequired.Count -gt 0){
+                return @{status='WARN';summary='One or more non-required runtimes are missing.';evidence=$RuntimeEvidence;remediation='Install optional runtimes if project policy needs them.'}
+            }
+            return @{status='PASS';summary='Configured runtimes and dependencies were validated.';evidence=$RuntimeEvidence}
         }.GetNewClosure()},
         @{ id='evidence.directory'; name='Evidence output directory can be created or accessed'; category='evidence'; requirement='REQUIRED'; body={
             if(-not (Test-Path -LiteralPath $EvidenceRoot)){
@@ -616,6 +676,7 @@ function New-SOCKSReport {
         duration_ms = [math]::Round(($EndTime - $StartTime).TotalMilliseconds, 3)
         discovery = $Environment.discovery
         git = Get-SOCKSGitEvidence -WorkspaceRoot $Environment.workspace_root
+        runtimes = Get-SOCKSRuntimeEvidence -Config $Config
         check_results = $Results
         gate = $Gate
         blocking_conditions = $Gate.blocking_conditions
@@ -716,4 +777,4 @@ function Get-SOCKSExitCode {
     }
 }
 
-Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret
+Export-ModuleMember -Function Import-SOCKSConfiguration,Test-SOCKSConfigurationSchema,Normalize-SOCKSPolicy,Merge-SOCKSHashtable,Get-SOCKSDiscoveryEvidence,Get-SOCKSGitEvidence,Get-SOCKSRuntimeEvidence,Get-SOCKSEnvironment,Get-SOCKSChecks,Invoke-SOCKSCheck,Invoke-SOCKSChecks,Get-SOCKSGateEvaluation,New-SOCKSReport,Save-SOCKSReports,Invoke-SOCKSReadiness,Get-SOCKSExitCode,Protect-SOCKSSecret

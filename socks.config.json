@@ -21,5 +21,14 @@
       "evidence_root",
       "required_runtime"
     ]
+  },
+  "dependencies": {
+    "runtimes": [
+      { "id": "powershell", "command": "powershell", "version_args": ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], "requirement": "REQUIRED" },
+      { "id": "git", "command": "git", "version_args": ["--version"], "requirement": "REQUIRED" },
+      { "id": "node", "command": "node", "version_args": ["--version"], "requirement": "ADVISORY" },
+      { "id": "npm", "command": "npm", "version_args": ["--version"], "requirement": "ADVISORY" },
+      { "id": "python", "command": "python", "version_args": ["--version"], "requirement": "ADVISORY" }
+    ]
   }
 }

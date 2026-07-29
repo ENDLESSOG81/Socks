@@ -212,6 +212,20 @@ try {
             Assert-True (@($Checks | Where-Object id -eq $Id).Count -eq 1) "$Id should be registered."
         }
     }
+
+    Invoke-Test 'SOCKS-005 runtime evidence includes PowerShell and Git' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
+        Assert-True (@($RuntimeEvidence | Where-Object { $_.id -eq 'powershell' -and $_.found }).Count -eq 1) 'PowerShell should be found.'
+        Assert-True (@($RuntimeEvidence | Where-Object { $_.id -eq 'git' -and $_.found }).Count -eq 1) 'Git should be found.'
+    }
+
+    Invoke-Test 'SOCKS-005 missing required runtime fails dependency check' {
+        $Config = Import-SOCKSConfiguration -ConfigPath (Join-Path $RepoRoot 'socks.config.json')
+        $Config.dependencies = @{ runtimes = @(@{ id='missing-required'; command='definitely-missing-socks-command'; version_args=@('--version'); requirement='REQUIRED' }) }
+        $RuntimeEvidence = Get-SOCKSRuntimeEvidence -Config $Config
+        Assert-True (-not $RuntimeEvidence[0].found) 'Missing runtime should not be found.'
+    }
 } finally {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
