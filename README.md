@@ -2,39 +2,24 @@
 
 System Operating Connect Control System.
 
-SOCKS verifies local project readiness and produces an operational gate result:
+SOCKS is the sterile readiness-gate standard for governed repositories. It defines how an environment-readiness decision must be described, evidenced, secured, and adopted.
 
-- `PASS`
-- `WARN`
-- `FAIL`
+This authoritative `main` branch is documentation-only. It does not contain an executable runtime, installer, connector, plugin system, packaging workflow, or project deployment logic.
 
-SOCKS-001 is the initial foundation build for local, non-destructive environment verification.
+## Authoritative Documents
 
-Current version: `SOCKS v1.0.0`
+- [Adoption Instructions](docs/ADOPTION-INSTRUCTIONS.md)
+- [Gate Contract](docs/GATE-CONTRACT.md)
+- [Evidence Requirements](docs/EVIDENCE-REQUIREMENTS.md)
+- [Security Rules](docs/SECURITY-RULES.md)
+- [Historical Decision Record](docs/HISTORICAL-DECISION-RECORD.md)
 
-## Run
+## Standard Outcomes
 
-```powershell
-.\socks.ps1
-```
+- `PASS`: required readiness conditions are satisfied.
+- `WARN`: readiness is non-blocking but requires operator attention.
+- `FAIL`: one or more required readiness conditions are missing, unsafe, indeterminate, or invalid.
 
-## Test
+## Sterile Boundary
 
-```powershell
-.\tests\Run-SOCKSTests.ps1
-```
-
-## Exit Codes
-
-- `0`: PASS
-- `1`: FAIL
-- `2`: WARN
-- `3`: system or configuration error
-
-See `docs/SOCKS-SYSTEM-CONTRACT.md` for the full contract.
-
-Release packaging:
-
-```powershell
-.\tools\New-SOCKSReleasePackage.ps1
-```
+SOCKS main defines standards only. Projects adopting SOCKS must not treat this repository as an installable runtime unless a future authoritative decision record explicitly changes that boundary.
